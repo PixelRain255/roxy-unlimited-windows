@@ -11,6 +11,9 @@
 #    pwsh -File roxy-direct-launch.ps1 -DirId <DIR_ID> -Headless
 #    pwsh -File roxy-direct-launch.ps1 -Workbench -WindowSize 1600,900
 #    pwsh -File roxy-direct-launch.ps1 -Extensions "C:\ext\a","C:\ext\b"
+#    pwsh -File roxy-direct-launch.ps1 -NoShow        # 不自动还原窗口
+#
+#  默认启动后会自动把窗口还原并拉到前台（见 MANUAL 坑 6）。
 # ============================================================
 [CmdletBinding()]
 param(
@@ -27,6 +30,7 @@ param(
   [switch]   $Maximized,
   [switch]   $NoGpu,
   [string[]] $ExtraArgs,               # raw passthrough (official startupParam equivalent)
+  [switch]   $NoShow,                  # 启动后不要自动把窗口还原/拉到前台
   [switch]   $DryRun
 )
 
@@ -115,6 +119,24 @@ foreach ($p in $profiles) {
     Write-Host ("      {0} {1}" -f (Redact $exe), (($a -join ' ') -replace [regex]::Escape($CacheDir), (Redact $CacheDir))) -ForegroundColor DarkGray
   } else {
     Start-Process -FilePath $exe -ArgumentList $a -WorkingDirectory (Split-Path $exe -Parent) | Out-Null
+
+    # 直启的窗口常常以最小化/隐藏态起来（详见 MANUAL 坑 6）。
+    # 官方启动器会把它还原，我们没人还原 —— 所以这里补上。
+    if (-not $NoShow -and -not $Headless) {
+      $port = $DebugPortBase + $i
+      $ready = $false
+      for ($k = 0; $k -lt 60; $k++) {
+        Start-Sleep -Milliseconds 500
+        try { $null = Invoke-WebRequest "http://127.0.0.1:$port/json/version" -TimeoutSec 2 -UseBasicParsing; $ready = $true; break } catch {}
+      }
+      if ($ready) {
+        # 单独起进程调用，避免 roxy-open.ps1 里的 exit 把本脚本一起结束
+        pwsh -NoProfile -File "$Here\roxy-open.ps1" -Port $port 2>&1 |
+          Select-String '\[after\]' | ForEach-Object { Write-Host ("      " + $_.Line.Trim()) -ForegroundColor DarkGray }
+      } else {
+        Write-Host "      (调试端口 $port 未就绪，跳过窗口还原；可稍后手动跑 roxy-open.ps1)" -ForegroundColor Yellow
+      }
+    }
     Start-Sleep -Milliseconds 400
   }
   $i++

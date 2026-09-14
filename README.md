@@ -19,7 +19,7 @@
 
 ```
 README.md                    本文件
-MANUAL-zh.md                 完整手册（原理 + 方法 + API + 五个坑）  ← 先看这个
+MANUAL-zh.md                 完整手册（原理 + 方法 + API + 六个坑）  ← 先看这个
 TECHNICAL-zh.md              技术详解（含逆向依据、源码位置、已证伪结论附录）
 
 scripts/                     核心脚本（全部零第三方依赖，需 Node ≥ 22）
@@ -28,7 +28,9 @@ scripts/                     核心脚本（全部零第三方依赖，需 Node 
   paths.mjs                  ★ 路径自动发现（数据目录/安装目录/内核）
   paths-cli.mjs              路径解析结果的命令行查询（供 PowerShell 复用）
   noise-ext/                 按档案实例化的 canvas/音频噪声扩展
-  roxy-direct-launch.ps1     命令行直启器
+  roxy-direct-launch.ps1     命令行直启器（启动后自动还原窗口）
+  roxy-open.ps1              ★ 把窗口从最小化/隐藏还原并拉到前台（见「坑 6」）
+  show-window.mjs            roxy-open.ps1 的 CDP 部分（设 windowState + 可选导航）
   roxy-newprofile.ps1        一键批量建档案 + 启动 + 健康检查
   mkprofile.mjs              离线档案生成器（命令行版）
   lumi.mjs                   lumi.conf 编解码器
@@ -158,7 +160,7 @@ $env:ROXY_HOME = "D:\RoxyData"     # 或设环境变量
 > **显式指定是权威的**：`--data-dir` 给了个无效路径会**直接报错退出**，
 > 不会静默回退到别的目录 —— 免得你以为在用 D 盘的数据、实际在用 C 盘的。
 
-## 三条必读注意事项
+## 四条必读注意事项
 
 1. **本地端口必须进白名单**。RoxyChrome 强制端口扫描保护，不在 `lumi.conf` 的
    `portScan.portScanWhiteList` 里的本地端口一律不可达（`net::ERR_ADDRESS_UNREACHABLE`）。
@@ -166,8 +168,17 @@ $env:ROXY_HOME = "D:\RoxyData"     # 或设环境变量
    排查"窗口连不上本地服务"**先看这个**，不要先怀疑代理。
 2. **不传 `proxy` 会继承旧档案的代理**。要直连就显式传 `"proxy": "direct"`。
 3. **没有代理预检**。官方打开前会验代理连通性，本工具不做，代理挂了照开。
+4. **直启的窗口可能在屏幕上看不见**。自己 spawn 内核时窗口常常以**最小化/隐藏**态起来
+   （`visible=False` 或 `iconic=True`）——官方启动器会替你还原，我们得自己做。
+   一行还原并置前：
 
-完整清单见 `MANUAL-zh.md` 第六部分（五个坑）。
+   ```powershell
+   pwsh -File scripts\roxy-open.ps1          # 加 -List 先看有哪些实例和状态
+   ```
+
+   `roxy-direct-launch.ps1` 已内置这一步（`-NoShow` 可关）。
+
+完整清单见 `MANUAL-zh.md` 第六部分（六个坑）。
 
 ## 验证
 
