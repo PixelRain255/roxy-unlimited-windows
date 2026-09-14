@@ -117,19 +117,60 @@ iv  = "3a105229aa31"                        // 12 字节
 ### 第 1 步 启动 API
 
 ```powershell
-node "%LOCALAPPDATA%\Programs\RoxyBrowser\_reverse\roxy-api.mjs" --port 50001
+node scripts\roxy-api.mjs --port 50001
 ```
 
-启动输出：
+启动输出（**路径全部自动发现，没有写死**）：
 
 ```
 [roxy-api] listening on http://127.0.0.1:50001
-[roxy-api] core        : ...\chrome-bin\152\RoxyChrome.exe
+[roxy-api] core        : ...\chrome-bin\152\RoxyChrome.exe  (v152)
+[roxy-api] data dir    : ...\AppData\Roaming\RoxyBrowser
 [roxy-api] profile base: ...\browser-cache
+[roxy-api] install dir : ...\AppData\Local\Programs\RoxyBrowser
+[roxy-api] chromedriver: ...\chrome-bin\152\chromedriver.exe
 [roxy-api] quota       : NONE — windows are resolved locally, no server call
 ```
 
 **不需要官方 App 运行**（实测：官方 App 完全没运行时，照样建号开窗、指纹注入正常）。
+
+#### 换机器 / 换安装位置
+
+路径按优先级自动搜索（`--data-dir` → `ROXY_HOME` → `%APPDATA%\RoxyBrowser` →
+扫描 `%APPDATA%` 下所有 `roxy*` 目录 → 从运行中进程反推）。手动指定：
+
+```powershell
+node scripts\roxy-api.mjs --port 50001 --data-dir "D:\RoxyData"
+# 或  $env:ROXY_HOME = "D:\RoxyData"
+```
+
+> **显式指定是权威的**：`--data-dir` 无效会**直接报错退出**，不会静默回退到别的目录。
+
+**⚠️ 新机器上第一次跑之前必须先做这一步**：装 RoxyBrowser → 登录 → 在官方界面里打开任意一个窗口，
+让它把内核下载下来。`RoxyChrome.exe` 是官方 App 下载的，**脚本不会生成它**。
+
+环境不满足时脚本会给出人话的失败原因并退出（不再抛裸 `ENOENT`）：
+
+```
+找不到 RoxyBrowser 的运行环境。
+
+  ✓ 数据目录：C:\...\AppData\Roaming\RoxyBrowser
+  ✗ 内核：内核目录不存在：C:\...\chrome-bin
+    RoxyChrome.exe 是官方 App 自己下载的，脚本不会生成它。
+    解决：在这台机器上安装并运行一次 RoxyBrowser，
+          登录后在界面里打开任意一个窗口，让它把内核下载下来。
+          或者从别的机器把 chrome-bin\ 整个目录复制到：
+            C:\...\chrome-bin
+
+  ✓ 安装目录：C:\...\Programs\RoxyBrowser
+```
+
+自查命令：
+
+```powershell
+node scripts\paths-cli.mjs            # 人话报告
+node scripts\mkprofile.mjs --list     # 同上，附带可用语言 / 分辨率 / OS 列表
+```
 
 ### 第 2 步 建档案并打开
 

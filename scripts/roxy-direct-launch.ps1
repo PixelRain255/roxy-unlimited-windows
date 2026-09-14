@@ -31,21 +31,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Root     = Join-Path $env:APPDATA 'RoxyBrowser'
-$CacheDir = Join-Path $Root 'browser-cache'
-$BinDir   = Join-Path $Root 'chrome-bin'
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-function Get-CoreExe {
-  if (-not (Test-Path $BinDir)) { throw "core dir not found: $BinDir" }
-  $cands = Get-ChildItem $BinDir -Directory | ForEach-Object {
-      [pscustomobject]@{
-        Exe  = Join-Path $_.FullName 'RoxyChrome.exe'
-        Rank = if ($_.Name -match '^\d+$') { [int]$_.Name } else { -1 }
-      }
-    } | Where-Object { Test-Path $_.Exe } | Sort-Object Rank -Descending | ForEach-Object { $_.Exe }
-  if (-not $cands) { throw "RoxyChrome.exe not found under $BinDir" }
-  return @($cands)[0]
+# ---- 路径自动发现：复用 Node 解析器，不重复实现 ----
+$P = (node "$Here\paths-cli.mjs" --json) | ConvertFrom-Json
+if (-not $P.ok) {
+  node "$Here\paths-cli.mjs"
+  throw "环境不满足，无法启动（可用 --data-dir 或 ROXY_HOME 指定数据目录）"
 }
+$CacheDir = $P.browserCacheDir
+$BinDir   = $P.coreBinDir
+
+function Get-CoreExe { return $P.coreExe }
 
 # ---- base args: mirrors gp[] from browser-manager/constants.ts ----
 $BaseArgs = @(

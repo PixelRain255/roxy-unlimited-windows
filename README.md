@@ -25,6 +25,8 @@ TECHNICAL-zh.md              技术详解（含逆向依据、源码位置、已
 scripts/                     核心脚本（全部零第三方依赖，需 Node ≥ 22）
   roxy-api.mjs               ★ 本地无限窗口 API 服务
   fingerprint.mjs            ★ 共享指纹合成 + lumi.conf 编解码
+  paths.mjs                  ★ 路径自动发现（数据目录/安装目录/内核）
+  paths-cli.mjs              路径解析结果的命令行查询（供 PowerShell 复用）
   noise-ext/                 按档案实例化的 canvas/音频噪声扩展
   roxy-direct-launch.ps1     命令行直启器
   roxy-newprofile.ps1        一键批量建档案 + 启动 + 健康检查
@@ -69,16 +71,73 @@ Invoke-RestMethod -Uri "$API/browser/close_all" -Method POST -ContentType "appli
 | OS | Windows |
 | Node | ≥ 22（需要内置 `fetch` / `WebSocket`） |
 | 依赖 | **无**，全部脚本零第三方依赖 |
-| RoxyBrowser | 需已安装（脚本读取其内核与数据目录） |
-| 官方 App | **不需要运行**（已实测） |
+| RoxyBrowser | **必须已安装，且至少成功下载过一次内核** |
+| 官方 App | 运行与否都行（脚本不需要它） |
 
-路径默认取自：
+### ⚠️ 关键：内核不是脚本能生成的
+
+`RoxyChrome.exe` 是**官方 App 自己下载的**，脚本不会生成它。所以一台干净的机器上直接跑会失败：
 
 ```
-内核    %APPDATA%\RoxyBrowser\chrome-bin\<coreVersion>\RoxyChrome.exe
-档案    %APPDATA%\RoxyBrowser\browser-cache\<dirId>\
-安装    %LOCALAPPDATA%\Programs\RoxyBrowser\
+✗ 内核：内核目录不存在：C:\Users\...\AppData\Roaming\RoxyBrowser\chrome-bin
+
+  RoxyChrome.exe 是官方 App 自己下载的，脚本不会生成它。
+  解决：在这台机器上安装并运行一次 RoxyBrowser，
+        登录后在界面里打开任意一个窗口，让它把内核下载下来。
+        或者从别的机器把 chrome-bin\ 整个目录复制到：
+          C:\Users\...\AppData\Roaming\RoxyBrowser\chrome-bin
 ```
+
+**新机器上跑之前，先做这一步**：装 RoxyBrowser → 登录 → 在官方界面里打开任意一个窗口。
+内核下载完成后，本工具包就能用了。
+
+## 路径自动发现
+
+**没有任何写死的路径。** 脚本按优先级搜索：
+
+**数据目录**（含内核、档案、配置 —— 这是必需的）
+
+1. `--data-dir <路径>` 或环境变量 `ROXY_HOME`
+2. `%APPDATA%\RoxyBrowser`、`%APPDATA%\roxybrowser`
+3. 扫描 `%APPDATA%` 下任何名字含 `roxy` 且含 `chrome-bin\` 或 `browser-cache\` 的目录
+4. 从正在运行的 `RoxyBrowser.exe` 进程反推
+
+**安装目录**（可选 —— 只用于官方扩展和 blockDomain 拦截页）
+
+1. `--install-dir <路径>` 或环境变量 `ROXY_INSTALL`
+2. `%LOCALAPPDATA%\Programs\RoxyBrowser`、`%ProgramFiles%\RoxyBrowser`
+3. 注册表卸载项
+4. 常见安装位置扫描
+
+安装目录找不到**不是致命错误**，只会少一个官方扩展，启动照常。
+
+**内核**：`<数据目录>\chrome-bin\<coreVersion>\RoxyChrome.exe`，取版本号最大者；
+找不到就递归兜底搜索。
+
+### 查看解析结果
+
+```powershell
+node scripts\paths-cli.mjs --list     # 或者 node scripts\mkprofile.mjs --list
+```
+
+```
+环境检查通过
+  数据目录  : C:\Users\...\AppData\Roaming\RoxyBrowser
+  安装目录  : C:\Users\...\AppData\Local\Programs\RoxyBrowser
+  内核      : ...\chrome-bin\152\RoxyChrome.exe  (v152)
+  chromedriver: ...\chrome-bin\152\chromedriver.exe
+  档案目录  : ...\browser-cache
+```
+
+### 手动指定
+
+```powershell
+node scripts\roxy-api.mjs --port 50001 --data-dir "D:\RoxyData"
+$env:ROXY_HOME = "D:\RoxyData"     # 或设环境变量
+```
+
+> **显式指定是权威的**：`--data-dir` 给了个无效路径会**直接报错退出**，
+> 不会静默回退到别的目录 —— 免得你以为在用 D 盘的数据、实际在用 C 盘的。
 
 ## 三条必读注意事项
 
