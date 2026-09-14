@@ -829,12 +829,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/proxy/modify') {
-      if (!body.id || !proxyStore.has(String(body.id))) return err(res, 'proxy not found', 101);
-      const prev = proxyStore.get(String(body.id));
+      if (!body.id) return err(res, 'id is required', 101);
+      const id = String(body.id);
+      let prev = proxyStore.get(id);
+      if (!prev) {
+        // 如果是从已有档案提取并首次编辑，将其转为代理池内持久化节点
+        prev = officialProxyFromBody(body);
+      }
       const updated = { ...prev, ...officialProxyFromBody(body), updateTime: nowText() };
-      proxyStore.set(String(body.id), updated);
+      if (!updated.host || !updated.port) return err(res, 'host and port are required', 500);
+      ignoredExtractedProxies.delete(id);
+      ignoredExtractedProxies.delete(`${updated.host}:${updated.port}`);
+      proxyStore.set(id, updated);
       saveProxyStore();
-      return ok(res, { id: String(body.id), ...proxyRow(String(body.id), updated) });
+      return ok(res, { id, ...proxyRow(id, updated) });
     }
 
     if (p === '/proxy/delete') {
