@@ -286,7 +286,7 @@ OK userAgent     Mozilla/5.0 ... Chrome/152.0.0.0 Safari/537.36
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--port` | 50001 | 监听端口 |
+| `--port` | 50000 | 监听端口（与官方默认端口一致；`50001` 仍可显式使用） |
 | `--headless-default` | off | 新建/打开的窗口默认无头 |
 | `--workbench-default` | off | 默认打开工作台标签页 |
 | `--app-port` | 45535 | 工作台端口 |
@@ -323,13 +323,26 @@ Invoke-RestMethod -Uri "$API/browser/create" -Method POST -ContentType "applicat
 
 ## 3.3 端点总表
 
-所有响应统一为 `{"code":0,"msg":"成功","data":...}`，失败时 `code` 非 0。
-**无需任何请求头鉴权**（端口即凭证）。已开 CORS。
+官方公开文档：https://roxybrowser.com/docs/api-documentation/api-reference.html。本地兼容层默认监听 127.0.0.1:50000；50001 可通过启动参数显式使用。
+
+所有响应统一为 `{"code":0,"msg":"Success","data":...}`，失败时 `code` 非 0。
+默认兼容本地 WebUI 时无需鉴权；设置 `--api-key` 或 `ROXY_API_KEY` 后，要求官方兼容的 `token` / `x-api-key` / `api-key` / `Authorization: Bearer` Header。已开 CORS。
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/health` | GET | 存活检查 |
 | `/meta/locales` | GET | 可用语言预设、分辨率池、OS 选项 |
+| `/browser/workspace` | GET | 官方兼容的本地工作区列表 |
+| `/browser/account` | GET | 官方兼容的账号列表 |
+| `/browser/label` | GET | 官方兼容的标签列表 |
+| `/browser/list_v3` | GET | 官方档案列表（支持分页与筛选） |
+| `/browser/detail` | GET | 官方档案详情 |
+| `/browser/template` | GET | 官方模板列表（本地默认为空） |
+| `/browser/mdf` | POST | 官方档案修改 |
+| `/browser/random_env` | POST | 官方随机环境 |
+| `/browser/clear_local_cache` | POST | 官方本地缓存清理 |
+| `/proxy/list` | GET | 本地代理列表 |
+| `/account/list` | GET | 本地账号列表 |
 | `/_blank` | GET | 内置空白页，用于让窗口访问到真实 http 源 |
 | `/browser/list` | GET | 列出全部本地档案 |
 | `/browser/create` | POST | **建新档案**（核心） |
@@ -355,6 +368,8 @@ Invoke-RestMethod -Uri "$API/browser/create" -Method POST -ContentType "applicat
 | `startUrl` | string | 启动页，缺省 `about:blank` |
 | `portScanWhiteList` | string | 本地端口白名单，**缺省已自动含本 API 端口** |
 | `from` | string | 用作结构模板的 dirId，缺省取最新档案 |
+
+官方客户端也可以传入 workspaceId、ingerInfo、proxyInfo、defaultOpenUrl、startupParam、rgs、osVersion 等字段。本地兼容层会忽略云端团队权限，并把可落地字段映射到本机 lumi.conf。
 
 ## 3.5 locale 预设
 

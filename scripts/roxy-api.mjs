@@ -13,31 +13,41 @@
 //  Run:  node roxy-api.mjs --port 50001
 // ============================================================
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import {
   getPaths, pathHelp, show, LOCALE_PRESETS, SCREENS, WINDOWS_PROFILES,
   coreExe, coreVersion, lumiPath, profileDir, hasProfile, isDirId,
-  readFingerprint, createProfileOnDisk,
+  readFingerprint, createProfileOnDisk, buildFingerprint, encLumi, parseProxy,
 } from './fingerprint.mjs';
 
+const NODE_MAJOR = Number.parseInt(process.versions.node.split('.')[0], 10);
+if (NODE_MAJOR < 22) {
+  console.error(`[roxy-api] Node.js >= 22 is required; found ${process.versions.node}.`);
+  process.exit(2);
+}
 // ---------- config ----------
 const argv = process.argv.slice(2);
 const argOf = (n, d) => { const i = argv.indexOf('--' + n); return i === -1 ? d : argv[i + 1]; };
-const PORT      = parseInt(argOf('port', '50001'), 10);
+const PORT      = parseInt(argOf('port', '50000'), 10);
 const HEADLESS  = argv.includes('--headless-default');
 const WORKBENCH = argv.includes('--workbench-default');
 const APP_PORT  = parseInt(argOf('app-port', '45535'), 10);
 const DEF_LOCALE = argOf('locale', null);
 const FULL_PATHS = argv.includes('--full-paths');   // 默认脱敏显示路径
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WEB_UI_FILE = path.join(HERE, 'webui', 'index.html');
+const API_KEY = argOf('api-key', process.env.ROXY_API_KEY ?? '');
 
 // 路径自动发现：--data-dir / --install-dir / ROXY_HOME / ROXY_INSTALL / 常见位置 / 注册表 / 运行中进程
 const PATHS = getPaths({ dataDir: argOf('data-dir'), installDir: argOf('install-dir') });
 
 const DRIVER = () => PATHS.chromedriver ?? path.join(path.dirname(coreExe()), 'chromedriver.exe');
-const windowNameOf = (dirId) => readFingerprint(dirId)?.windowName || dirId.slice(0, 8);
+const windowNameOf = (dirId) => readFingerprint(dirId)?.windowName || (dirId ? String(dirId).slice(0, 8) : 'unknown');
 
 // ---------- per-profile canvas/audio noise via CDP ----------
 // The core's own canvasContext.noise knobs are inert in this build (verified:
@@ -45,7 +55,7 @@ const windowNameOf = (dirId) => readFingerprint(dirId)?.windowName || dirId.slic
 // and MAIN-world content scripts do not inject reliably here, so the shim is
 // installed over CDP with Page.addScriptToEvaluateOnNewDocument — the same
 // mechanism Playwright uses. It survives detach for the lifetime of each target.
-const NOISE_SRC_DIR = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'noise-ext');
+const NOISE_SRC_DIR = path.join(HERE, 'noise-ext');
 const NOISE_SRC = path.join(NOISE_SRC_DIR, 'noise.js');
 const NOISE_TEMP = path.join(PATHS.tempDir ?? process.cwd(), 'profile-noise');
 const noiseSource = (dirId, fp) => {
@@ -106,35 +116,84 @@ async function installNoiseShim(wsUrl, source) {
 // ---------- running-window registry ----------
 /** dirId -> {dirId,pid,ws,http,windowName,coreVersion,driver,startedAt} */
 const running = new Map();
+const proxyStore = new Map();
+const accountStore = new Map();
 
 const json = (res, obj, status = 200) => {
   const body = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 };
-const ok  = (res, data) => json(res, { code: 0, msg: '成功', data: data ?? null });
+const ok  = (res, data) => json(res, { code: 0, msg: 'Success', data: data ?? null });
 const err = (res, msg, code = 101) => json(res, { code, msg, data: null });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitDevTools(ud, timeoutMs = 45000) {
+async function readDevTools(ud) {
   const f = path.join(ud, 'DevToolsActivePort');
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    try {
-      const t = fs.readFileSync(f, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
-      const port = parseInt(t[0], 10);
-      if (port > 0 && t[1]) {
-        try {
-          const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) });
-          if (r.ok) return { port, wsPath: t[1] };
-        } catch { /* not listening yet */ }
-      }
-    } catch { /* not written yet */ }
-    await sleep(300);
-  }
-  throw new Error('timed out waiting for DevTools endpoint');
+  try {
+    const t = fs.readFileSync(f, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
+    const port = parseInt(t[0], 10);
+    if (port > 0 && t[1]) {
+      const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) return { port, wsPath: t[1] };
+    }
+  } catch { /* stale or not ready */ }
+  return null;
 }
 
+async function waitDevTools(ud, proc, timeoutMs = 45000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const endpoint = await readDevTools(ud);
+    if (endpoint) return endpoint;
+    if (proc && proc.exitCode !== null) {
+      throw new Error(`RoxyChrome exited before DevTools became ready (pid=${proc.pid}, code=${proc.exitCode ?? 'unknown'}, signal=${proc.signalCode ?? 'none'})`);
+    }
+    await sleep(300);
+  }
+  throw new Error(`timed out waiting for DevTools endpoint (pid=${proc?.pid ?? 'unknown'}, profile=${ud})`);
+}
+
+function showWindow(port) {
+  if (process.platform !== 'win32') return Promise.resolve({ ok: false, error: 'window showing is only supported on Windows' });
+  const script = path.join(HERE, 'roxy-open.ps1');
+  return new Promise((resolve) => {
+    execFile('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Port', String(port),
+    ], { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) console.warn(`[roxy-api] window restore failed on port ${port}: ${error.message}`);
+      resolve({ ok: !error, stdout: stdout ?? '', stderr: stderr ?? '', error: error?.message ?? null });
+    });
+  });
+}
+async function recoverWindow(dirId, endpoint, bringToFront = false) {
+  const current = running.get(dirId);
+  if (current) return current;
+
+
+  const fp = readFingerprint(dirId) ?? {};
+  const rec = {
+    dirId,
+    pid: null,
+    port: endpoint.port,
+    http: `127.0.0.1:${endpoint.port}`,
+    ws: `ws://127.0.0.1:${endpoint.port}${endpoint.wsPath}`,
+    windowName: windowNameOf(dirId),
+    coreVersion: coreVersion(),
+    driver: DRIVER(),
+    startedAt: Date.now(),
+    noiseInstalled: false,
+  };
+  running.set(dirId, rec);
+  try {
+    rec.noiseController = await installNoiseShim(rec.ws, noiseSource(dirId, fp));
+    rec.noiseInstalled = true;
+  } catch (e) {
+    console.warn(`[roxy-api] recovered noise shim failed for ${dirId}: ${e?.message ?? e}`);
+  }
+  if (bringToFront) await showWindow(endpoint.port);
+  return rec;
+}
 async function launchWindow(dirId, opts = {}) {
   if (!hasProfile(dirId)) throw Object.assign(new Error('窗口/数据不存在，请刷新页面后重试'), { code: 101 });
 
@@ -142,6 +201,8 @@ async function launchWindow(dirId, opts = {}) {
   if (cur) { try { process.kill(cur.pid, 0); return cur; } catch { running.delete(dirId); } }
 
   const ud = profileDir(dirId);
+  const existing = await readDevTools(ud);
+  if (existing) return recoverWindow(dirId, existing, true);
   for (const f of ['DevToolsActivePort', 'SingletonCookie', 'SingletonLock', 'SingletonSocket']) {
     try { fs.rmSync(path.join(ud, f), { force: true }); } catch {}
   }
@@ -184,10 +245,10 @@ async function launchWindow(dirId, opts = {}) {
   if (opts.useGpu === false) args.push('--disable-gpu');
   args.push(opts.startUrl || 'about:blank');
 
-  const proc = spawn(coreExe(), args, { detached: true, stdio: 'ignore', windowsHide: !headless });
+  const proc = spawn(coreExe(), args, { detached: true, stdio: 'ignore', windowsHide: headless });
   proc.unref();
 
-  const { port, wsPath } = await waitDevTools(ud);
+  const { port, wsPath } = await waitDevTools(ud, proc);
   const ws = `ws://127.0.0.1:${port}${wsPath}`;
   const rec = {
     dirId, pid: proc.pid, port,
@@ -209,6 +270,7 @@ async function launchWindow(dirId, opts = {}) {
     console.warn(`[roxy-api] noise shim failed for ${dirId}: ${e?.message ?? e}`);
   }
 
+  if (!headless) await showWindow(port);
   return rec;
 }
 
@@ -237,11 +299,258 @@ async function closeWindow(dirId) {
   try { rec.noiseController?.close(); } catch {}
   try { await cdpClose(rec.ws); } catch {}
   await sleep(600);
-  try { process.kill(rec.pid, 0); execFile('taskkill', ['/PID', String(rec.pid), '/T', '/F'], () => {}); } catch {}
+  if (rec.pid) { try { process.kill(rec.pid, 0); execFile('taskkill', ['/PID', String(rec.pid), '/T', '/F'], () => {}); } catch {} }
   running.delete(dirId);
   return true;
 }
 
+// ---------- official-compatible local data helpers ----------
+const LOCAL_WORKSPACE = {
+  id: '1',
+  workspaceName: 'Local Workspace',
+  project_details: [{ projectId: '1', projectName: 'Local Profiles' }],
+};
+const nowText = () => new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+const idListOf = (value) => Array.isArray(value)
+  ? value.map((x) => String(x)).filter(Boolean)
+  : String(value ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+const pageOf = (rows, source) => {
+  const index = Math.max(1, Number(source.page_index ?? 1) || 1);
+  const size = Math.max(1, Math.min(1000, Number(source.page_size ?? 15) || 15));
+  return { total: rows.length, rows: rows.slice((index - 1) * size, index * size) };
+};
+function proxyInfoOf(fp) {
+  const p = fp?.fproxy;
+  if (!p?.host) return {
+    moduleId: '0', proxyMethod: 'custom', proxyCategory: 'noproxy', ipType: 'IPV4', protocol: '',
+    host: '', port: '', proxyUserName: '', proxyPassword: '', refreshUrl: '', lastIp: '',
+    lastCountry: '', checkChannel: '',
+  };
+  const protocol = String(p.type || 'socks5').toUpperCase();
+  return {
+    moduleId: '0', proxyMethod: 'custom', proxyCategory: protocol, ipType: 'IPV4', protocol,
+    host: String(p.host), port: String(p.port ?? ''), proxyUserName: p.username ?? '',
+    proxyPassword: p.password ?? '', refreshUrl: '', lastIp: '', lastCountry: '', checkChannel: '',
+  };
+}
+function proxyUrlOf(proxyInfo) {
+  if (!proxyInfo || String(proxyInfo.proxyCategory || '').toLowerCase() === 'noproxy') return 'direct';
+  const protocol = String(proxyInfo.protocol || proxyInfo.proxyCategory || 'socks5').toLowerCase();
+  const host = String(proxyInfo.host || '');
+  const port = String(proxyInfo.port || '');
+  if (!host || !port) return undefined;
+  const user = proxyInfo.proxyUserName ? encodeURIComponent(String(proxyInfo.proxyUserName)) : '';
+  const pass = proxyInfo.proxyPassword ? `:${encodeURIComponent(String(proxyInfo.proxyPassword))}` : '';
+  return `${protocol}://${user ? `${user}${pass}@` : ''}${host}:${port}`;
+}
+function officialProfileRow(dirId, fp, active, index) {
+  const platformVersion = String(fp?.userAgentMetadata?.platformVersion || '15.0.0');
+  const osVersion = platformVersion === '10.0.0' ? '10' : '11';
+  const t = nowText();
+  return {
+    id: dirId,
+    dirId,
+    windowSortNum: index + 1,
+    windowName: fp?.windowName ?? (dirId ? String(dirId).slice(0, 8) : 'profile'),
+    coreVersion: String(fp?.chromeVersion ?? coreVersion()),
+    coreType: 'Chrome',
+    os: 'Windows',
+    osVersion,
+    userAgent: fp?.userAgent ?? '',
+    cookie: [],
+    searchEngine: fp?.searchEngine?.name ?? 'Google',
+    windowPlatformList: [],
+    defaultOpenUrl: Array.isArray(fp?.defaultOpenUrl) ? fp.defaultOpenUrl : [],
+    windowRemark: fp?.windowRemark ?? '',
+    projectId: '1',
+    projectName: 'Local Profiles',
+    openStatus: Boolean(active),
+    statusInfo: active ? [{ openTime: t, openUserName: 'local' }] : [],
+    createTime: t,
+    updateTime: t,
+    userName: 'local',
+    openTime: active ? t : '',
+    closeTime: '',
+    proxyInfo: proxyInfoOf(fp),
+    isOften: false,
+    labelInfo: [],
+  };
+}
+async function localProfileRows() {
+  const entries = fs.readdirSync(PATHS.browserCacheDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && hasProfile(e.name));
+  return Promise.all(entries.map(async (e, i) => {
+    const fp = readFingerprint(e.name) ?? {};
+    let active = running.get(e.name);
+    if (!active) {
+      const endpoint = await readDevTools(profileDir(e.name));
+      if (endpoint) active = await recoverWindow(e.name, endpoint, false);
+    }
+    return { id: e.name, dirId: e.name, fp, active, index: i };
+  }));
+}
+function normalizeProfileRequest(body) {
+  const finger = body.fingerInfo ?? {};
+  let proxy = body.proxy;
+  if (proxy === undefined && body.proxyId) {
+    const pItem = proxyStore.get(String(body.proxyId));
+    if (pItem) proxy = proxyUrlOf(pItem);
+  }
+  if (proxy === undefined) {
+    proxy = body.proxyInfo !== undefined
+      ? proxyUrlOf(body.proxyInfo)
+      : body.workspaceId !== undefined ? 'direct' : undefined;
+  }
+  const locale = body.locale ?? (finger.isLanguageBaseIp === false ? (finger.language || finger.displayLanguage) : undefined);
+  const timeZone = body.timeZone ?? (finger.isTimeZone === false ? finger.timeZone : undefined);
+  let screen = body.screen;
+  if (typeof screen === 'string' && /^\d+x\d+$/.test(screen)) screen = screen.split('x').map(Number);
+  if (!screen && finger.resolutionType && finger.resolutionX && finger.resolutionY) screen = [Number(finger.resolutionX), Number(finger.resolutionY)];
+  const os = body.os === 'Windows'
+    ? (body.osVersion === '10' ? 'Windows 10' : body.osVersion === '11' ? 'Windows 11' : undefined)
+    : body.os;
+  const args = Array.isArray(body.args) ? [...body.args] : [];
+  if (body.startupParam) args.push(...String(body.startupParam).split(';').map((x) => x.trim()).filter(Boolean));
+  return {
+    from: body.from,
+    windowName: body.windowName,
+    proxy,
+    locale,
+    timeZone,
+    acceptLang: body.acceptLang,
+    os,
+    screen,
+    startUrl: body.startUrl ?? body.defaultOpenUrl?.[0] ?? 'about:blank',
+    open: body.open,
+    headless: body.headless,
+    workbench: body.workbench ?? (finger.openWorkbench === 1),
+    useGpu: body.useGpu ?? finger.useGpu,
+    args,
+    portScanWhiteList: (body.portScanWhiteList ?? finger.portScanList)?.replaceAll(',', ';'),
+  };
+}
+function modifyFingerprintOnDisk(dirId, body) {
+  if (!hasProfile(dirId)) throw Object.assign(new Error('窗口/数据不存在'), { code: 101 });
+  const fp = readFingerprint(dirId);
+  if (!fp) throw new Error('lumi.conf 无法解密');
+  const normalized = normalizeProfileRequest(body);
+  const finger = body.fingerInfo ?? {};
+  if (body.windowName !== undefined) fp.windowName = String(body.windowName);
+  if (body.windowRemark !== undefined) fp.windowRemark = String(body.windowRemark);
+  if (body.searchEngine !== undefined) fp.searchEngine = { name: String(body.searchEngine) };
+  if (Array.isArray(body.defaultOpenUrl)) fp.defaultOpenUrl = body.defaultOpenUrl.map(String);
+  if (normalized.locale) fp.appLocale = normalized.locale;
+  if (normalized.timeZone) fp.timeZone = normalized.timeZone;
+  if (normalized.acceptLang) fp.acceptLang = normalized.acceptLang;
+  if (normalized.screen) {
+    const screen = Array.isArray(normalized.screen) ? normalized.screen : String(normalized.screen).split('x').map(Number);
+    if (screen.length === 2 && screen.every((x) => Number.isFinite(x))) fp.screen = { width: screen[0], height: screen[1], availWidth: screen[0], availHeight: screen[1], colorDepth: 24, pixelDepth: 24 };
+  }
+  if (body.osVersion) fp.userAgentMetadata = { ...(fp.userAgentMetadata ?? {}), platform: 'Windows', mobile: false, platformVersion: String(body.osVersion) === '10' ? '10.0.0' : '15.0.0' };
+  if (body.proxy !== undefined || body.proxyInfo !== undefined || body.proxyId !== undefined) {
+    if (normalized.proxy === 'direct') delete fp.fproxy;
+    else if (normalized.proxy) fp.fproxy = parseProxy(normalized.proxy);
+  }
+  if (finger.hardwareConcurrent !== undefined) fp.navigator = { ...(fp.navigator ?? {}), hardwareConcurrency: Number(finger.hardwareConcurrent) };
+  if (finger.deviceMemory !== undefined) fp.navigator = { ...(fp.navigator ?? {}), deviceMemory: Number(finger.deviceMemory) };
+  if (finger.doNotTrack !== undefined) fp.doNotTrack = Boolean(finger.doNotTrack);
+  if (finger.webGLManufacturer || finger.webGLRender) fp.WebGL = { ...(fp.WebGL ?? {}), webglVendor: finger.webGLManufacturer ?? fp.WebGL.webglVendor, webglRenderer: finger.webGLRender ?? fp.WebGL.webglRenderer };
+  if (finger.portScanProtect !== undefined || finger.portScanList !== undefined) fp.portScan = { ...(fp.portScan ?? {}), enablePortScanWhiteList: Boolean(finger.portScanProtect ?? true), portScanWhiteList: String(finger.portScanList ?? fp.portScan?.portScanWhiteList ?? '') .replaceAll(',', ';') };
+  if (body.startupParam !== undefined) fp.startupParam = String(body.startupParam);
+  fs.writeFileSync(lumiPath(dirId), encLumi(JSON.stringify(fp)));
+  return fp;
+}
+const PROXY_STORE_FILE = path.join(PATHS.dataDir || process.cwd(), 'proxy_pool.json');
+const PROXY_IGNORED_FILE = path.join(PATHS.dataDir || process.cwd(), 'proxy_ignored.json');
+const ignoredExtractedProxies = new Set();
+
+function proxyRow(id, value) {
+  const p = value ?? {};
+  const protocol = String(p.protocol || p.type || p.proxyCategory || 'SOCKS5').toUpperCase();
+  return {
+    id: String(id), checkStatus: p.checkStatus ?? 0, checkChannel: p.checkChannel ?? '', checkChannelValue: '', lastIp: p.lastIp ?? '',
+    lastCountry: p.lastCountry ?? '', lastState: '', lastCity: '', ipType: p.ipType ?? 'IPV4', protocol,
+    type: protocol.toLowerCase(), isSaved: p.isSaved !== false,
+    host: String(p.host ?? ''), port: String(p.port ?? ''), proxyPassword: String(p.proxyPassword ?? p.password ?? ''),
+    proxyUserName: String(p.proxyUserName ?? p.username ?? ''), refreshUrl: p.refreshUrl ?? '',
+    remark: String(p.remark ?? p.title ?? p.name ?? ''),
+    checkTime: p.checkTime ?? '', createTime: p.createTime ?? nowText(), updateTime: p.updateTime ?? nowText(),
+  };
+}
+
+function officialProxyFromBody(body) {
+  const p = body?.proxyInfo ?? body ?? {};
+  const proto = String(p.protocol ?? p.proxyCategory ?? p.type ?? 'socks5').toLowerCase();
+  return {
+    proxyCategory: proto.toUpperCase(), protocol: proto.toUpperCase(), type: proto, ipType: p.ipType ?? 'IPV4',
+    host: String(p.host ?? '').trim(), port: String(p.port ?? '').trim(),
+    proxyUserName: String(p.proxyUserName ?? p.username ?? p.user ?? '').trim(),
+    proxyPassword: String(p.proxyPassword ?? p.password ?? p.pass ?? '').trim(),
+    refreshUrl: String(p.refreshUrl ?? '').trim(), checkChannel: String(p.checkChannel ?? '').trim(),
+    remark: String(p.remark ?? p.title ?? p.name ?? '').trim(),
+    createTime: p.createTime ?? nowText(),
+    updateTime: p.updateTime ?? nowText(),
+  };
+}
+
+function loadProxyStore() {
+  try {
+    if (fs.existsSync(PROXY_STORE_FILE)) {
+      const raw = fs.readFileSync(PROXY_STORE_FILE, 'utf8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (item && item.id && item.host) {
+            proxyStore.set(String(item.id), officialProxyFromBody(item));
+          }
+        }
+      }
+    }
+    if (fs.existsSync(PROXY_IGNORED_FILE)) {
+      const raw = fs.readFileSync(PROXY_IGNORED_FILE, 'utf8');
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        for (const item of list) if (item) ignoredExtractedProxies.add(String(item));
+      }
+    }
+  } catch (err) {
+    console.warn('[roxy-api] Failed to load proxy_pool.json or proxy_ignored.json:', err.message);
+  }
+}
+
+function saveProxyStore() {
+  try {
+    const list = [];
+    for (const [id, val] of proxyStore) {
+      list.push({ id, ...val });
+    }
+    const dir = path.dirname(PROXY_STORE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(PROXY_STORE_FILE, JSON.stringify(list, null, 2), 'utf8');
+    fs.writeFileSync(PROXY_IGNORED_FILE, JSON.stringify([...ignoredExtractedProxies], null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[roxy-api] Failed to save proxy store:', err.message);
+  }
+}
+function accountRow(id, body, times = {}) {
+  return {
+    id: String(id),
+    platformUrl: body.platformUrl ?? '',
+    platformUserName: body.platformUserName ?? '',
+    platformPassword: body.platformPassword ?? '',
+    platformEfa: body.platformEfa ?? '',
+    platformCookies: Array.isArray(body.platformCookies) ? body.platformCookies : [],
+    platformName: body.platformName ?? body.platformUrl ?? '',
+    platformRemarks: body.platformRemarks ?? '',
+    createTime: times.createTime ?? body.createTime ?? nowText(),
+    updateTime: times.updateTime ?? body.updateTime ?? nowText(),
+  };
+}
+function tokenOf(req) {
+  const auth = String(req.headers.authorization ?? '');
+  return req.headers.token ?? req.headers['x-api-key'] ?? req.headers['api-key']
+    ?? (auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? '');
+}
 // ---------- HTTP ----------
 const readBody = (req) => new Promise((resolve) => {
   let b = '';
@@ -258,10 +567,36 @@ const server = http.createServer(async (req, res) => {
   }
   res.setHeader('Access-Control-Allow-Origin', '*');
   const body = req.method === 'POST' ? await readBody(req) : {};
+  const query = Object.fromEntries(url.searchParams.entries());
 
   try {
+    if (API_KEY && !['/health', '/', '/index.html', '/meta/info'].includes(p) && tokenOf(req) !== API_KEY) {
+      return err(res, 'Unauthorized', 401);
+    }
     if (p === '/health') return ok(res, 'ok');
 
+    if (p === '/meta/info') {
+      return ok(res, {
+        apiPort: PORT,
+        appPort: APP_PORT,
+        coreVersion: PATHS.coreVersion,
+        nodeVersion: process.versions.node,
+        nodeMajor: NODE_MAJOR,
+        webUiVersion: 3,
+        apiKeyRequired: Boolean(API_KEY),
+        officialPort: 50000,
+        defaultLocale: DEF_LOCALE,
+        headlessDefault: HEADLESS,
+        workbenchDefault: WORKBENCH,
+        defaultPortScanWhiteList: PORT + ';45535;' + APP_PORT + ';',
+      });
+    }
+
+    if ((p === '/' || p === '/index.html') && req.method === 'GET') {
+      const html = fs.readFileSync(WEB_UI_FILE, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(html);
+    }
     // minimal same-origin page: gives the per-profile noise extension a real
     // http origin to run on (content scripts never match about:blank)
     if (p === '/_blank') {
@@ -275,45 +610,81 @@ const server = http.createServer(async (req, res) => {
       return ok(res, { locales: LOCALE_PRESETS, screens: SCREENS, os: WINDOWS_PROFILES.map((w) => w.name) });
     }
 
-    if (p === '/browser/list') {
-      const rows = fs.readdirSync(PATHS.browserCacheDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && hasProfile(e.name))
-        .map((e, i) => {
-          const fp = readFingerprint(e.name) ?? {};
-          return {
-            dirId: e.name,
-            windowName: fp.windowName ?? e.name.slice(0, 8),
-            windowSortNum: i + 1,
-            openStatus: running.has(e.name) ? 1 : 0,
-            statusInfo: null,
-            proxyInfo: fp.fproxy ?? {},
-            // extras beyond the official shape (safe to ignore)
-            timeZone: fp.timeZone ?? null,
-            locale: fp.appLocale ?? null,
-            screen: fp.screen ? `${fp.screen.width}x${fp.screen.height}` : null,
-          };
-        });
-      return ok(res, { rows, total: rows.length });
+    if (p === '/browser/workspace' || p === '/workspace/list' || p === '/workspace' || p === '/browser/workspace/list') {
+      return ok(res, { total: 1, rows: [LOCAL_WORKSPACE], workSpaceList: [LOCAL_WORKSPACE], workspaceList: [LOCAL_WORKSPACE] });
     }
 
+    if (p === '/browser/account' || p === '/account/list') {
+      const rows = [...accountStore.values()];
+      return ok(res, pageOf(rows, query));
+    }
+
+    if (p === '/browser/label') {
+      return ok(res, []);
+    }
+
+    if (p === '/browser/list_v3') {
+      const wantedIds = idListOf(query.dirIds);
+      const wantedSorts = idListOf(query.sortNums).map(Number);
+      const rows = (await localProfileRows())
+        .map((item) => officialProfileRow(item.id, item.fp, Boolean(item.active), item.index))
+        .filter((row) => !wantedIds.length || wantedIds.includes(row.dirId))
+        .filter((row) => !query.windowName || row.windowName.includes(query.windowName))
+        .filter((row) => !wantedSorts.length || wantedSorts.includes(row.windowSortNum))
+        .filter((row) => !query.os || row.os === query.os)
+        .filter((row) => !query.projectIds || idListOf(query.projectIds).includes(row.projectId))
+        .filter((row) => !query.windowRemark || row.windowRemark.includes(query.windowRemark));
+      return ok(res, pageOf(rows, query));
+    }
+
+    if (p === '/browser/detail') {
+      const dirId = query.dirId;
+      if (!dirId || !hasProfile(dirId)) return err(res, '窗口/数据不存在', 101);
+      const fp = readFingerprint(dirId);
+      const active = running.get(dirId) || await (async () => {
+        const endpoint = await readDevTools(profileDir(dirId));
+        return endpoint ? await recoverWindow(dirId, endpoint, false) : null;
+      })();
+      return ok(res, { total: 1, rows: [officialProfileRow(dirId, fp ?? {}, Boolean(active), 0)] });
+    }
+
+    if (p === '/browser/template') {
+      return ok(res, []);
+    }
+
+    if (p === '/browser/list') {
+      const rows = await localProfileRows();
+      const data = rows.map((item) => {
+        const fp = item.fp ?? {};
+        const dirId = item.dirId || item.id || '';
+        return {
+          id: dirId,
+          dirId,
+          windowName: fp.windowName ?? (dirId ? String(dirId).slice(0, 8) : '未命名'),
+          windowSortNum: item.index + 1,
+          openStatus: item.active ? 1 : 0,
+          statusInfo: null,
+          proxyInfo: fp.fproxy ?? {},
+          timeZone: fp.timeZone ?? null,
+          locale: fp.appLocale ?? null,
+          screen: fp.screen ? `${fp.screen.width}x${fp.screen.height}` : null,
+        };
+      });
+      return ok(res, { rows: data, total: data.length });
+    }
     // ---------- create ----------
     if (p === '/browser/create') {
-      let screen = null;
-      if (Array.isArray(body.screen)) screen = body.screen;
-      else if (typeof body.screen === 'string' && /^\d+x\d+$/.test(body.screen)) screen = body.screen.split('x').map(Number);
-
+      const opts = normalizeProfileRequest(body);
       const built = createProfileOnDisk({
-        from: body.from,
-        windowName: body.windowName,
-        proxy: body.proxy,
-        locale: body.locale ?? DEF_LOCALE ?? undefined,
-        timeZone: body.timeZone,
-        acceptLang: body.acceptLang,
-        os: body.os,
-        screen,
-        // without this the window cannot reach this API at all (portScanProtect)
-        portScanWhiteList: body.portScanWhiteList ?? `${PORT};45535;${APP_PORT};`,
+        ...opts,
+        locale: opts.locale ?? DEF_LOCALE ?? undefined,
+        portScanWhiteList: opts.portScanWhiteList ?? `${PORT};45535;${APP_PORT};`,
       });
+      if (body.fingerInfo && typeof body.fingerInfo === 'object') {
+        const fp = readFingerprint(built.dirId);
+        fp.officialFingerInfo = body.fingerInfo;
+        fs.writeFileSync(lumiPath(built.dirId), encLumi(JSON.stringify(fp)));
+      }
       const info = {
         dirId: built.dirId,
         windowName: built.cfg.windowName,
@@ -323,30 +694,243 @@ const server = http.createServer(async (req, res) => {
         os: built.os,
         proxy: built.cfg.fproxy ? `${built.cfg.fproxy.type}://${built.cfg.fproxy.host}:${built.cfg.fproxy.port}` : 'direct',
         portScanWhiteList: built.cfg.portScan?.portScanWhiteList ?? null,
-        startUrl: body.startUrl ?? null,
+        startUrl: opts.startUrl ?? null,
       };
       if (body.open) {
-        const rec = await launchWindow(built.dirId, body);
+        const rec = await launchWindow(built.dirId, opts);
         return ok(res, { ...handleOf(rec), ...info });
       }
       return ok(res, info);
     }
-
     if (p === '/browser/open') {
-      if (!body.dirId) return err(res, 'dirId is required');
-      const rec = await launchWindow(body.dirId, body);
+      const dirId = body.dirId ?? body.id ?? query.dirId ?? query.id;
+      if (!dirId) return err(res, 'dirId is required');
+      const rec = await launchWindow(dirId, normalizeProfileRequest({ ...body, dirId }));
       return ok(res, handleOf(rec));
     }
 
-    if (p === '/browser/connection_info') {
-      const dirId = url.searchParams.get('dirId') ?? body.dirId;
-      const list = [...running.values()].filter((r) => !dirId || r.dirId === dirId).map((r, i) => handleOf(r, i + 1));
-      return ok(res, list);
+    if (p === '/browser/mdf') {
+      const dirId = body.dirId ?? body.id ?? query.dirId ?? query.id;
+      if (!dirId) return err(res, 'dirId is required');
+      let active = running.get(dirId);
+      if (!active) {
+        const endpoint = await readDevTools(profileDir(dirId));
+        if (endpoint) active = await recoverWindow(dirId, endpoint, false);
+      }
+      if (active) await closeWindow(dirId);
+      modifyFingerprintOnDisk(dirId, body);
+      return ok(res);
     }
 
+    if (p === '/browser/random_env') {
+      const dirId = body.dirId ?? body.id ?? query.dirId ?? query.id;
+      if (!dirId || !hasProfile(dirId)) return err(res, '窗口/数据不存在', 101);
+      let active = running.get(dirId);
+      if (!active) {
+        const endpoint = await readDevTools(profileDir(dirId));
+        if (endpoint) active = await recoverWindow(dirId, endpoint, false);
+      }
+      if (active) await closeWindow(dirId);
+      const old = readFingerprint(body.dirId) ?? {};
+      const built = buildFingerprint({
+        template: old,
+        dirId: body.dirId,
+        userDataDir: profileDir(body.dirId),
+        windowName: old.windowName,
+        proxy: proxyUrlOf(proxyInfoOf(old)),
+        locale: old.appLocale,
+        timeZone: old.timeZone,
+        acceptLang: old.acceptLang,
+        screen: old.screen ? [old.screen.width, old.screen.height] : undefined,
+        os: old.userAgentMetadata?.platformVersion === '10.0.0' ? 'Windows 10' : 'Windows 11',
+        portScanWhiteList: old.portScan?.portScanWhiteList ?? `${PORT};45535;${APP_PORT};`,
+      });
+      fs.writeFileSync(lumiPath(body.dirId), encLumi(JSON.stringify(built.cfg)));
+      return ok(res);
+    }
+
+    if (p === '/browser/clear_local_cache') {
+      const ids = idListOf(body.dirIds ?? body.dirId ?? body.ids ?? body.id ?? query.dirIds ?? query.dirId ?? query.id);
+      if (!ids.length) return err(res, 'dirIds is required');
+      const type = String(body.type ?? 'all').toLowerCase();
+      const partialNames = new Set(['Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'GrShaderCache', 'ShaderCache', 'Media Cache', 'Application Cache']);
+      for (const dirId of ids) {
+        if (!hasProfile(dirId)) continue;
+        let active = running.get(dirId);
+        if (!active) {
+          const endpoint = await readDevTools(profileDir(dirId));
+          if (endpoint) active = await recoverWindow(dirId, endpoint, false);
+        }
+        if (active) await closeWindow(dirId);
+        for (const entry of fs.readdirSync(profileDir(dirId), { withFileTypes: true })) {
+          const keep = ['lumi.conf', 'chrome-icon.ico', 'Cookies', 'Network', 'Local Storage', 'IndexedDB', 'Session Storage', 'Service Worker', 'Preferences', 'Secure Preferences', 'Login Data', 'Web Data'].includes(entry.name);
+          const remove = type === 'partial' ? partialNames.has(entry.name) : !keep;
+          if (remove) fs.rmSync(path.join(profileDir(dirId), entry.name), { recursive: true, force: true });
+        }
+      }
+      return ok(res);
+    }
+
+    if (p === '/browser/clear_server_cache') {
+      return ok(res);
+    }
+
+    if (p === '/proxy/detect_channel') {
+      return ok(res, []);
+    }
+
+    if (p === '/proxy/bought_list') {
+      return ok(res, { total: 0, rows: [] });
+    }
+
+    if (p === '/proxy/list') {
+      const rows = [];
+      const seen = new Set();
+      for (const [id, value] of proxyStore) {
+        rows.push(proxyRow(id, { ...value, isSaved: true }));
+        seen.add(`${value.host}:${value.port}`);
+      }
+      for (const item of await localProfileRows()) {
+        const pinfo = proxyInfoOf(item.fp);
+        if (!pinfo.host || seen.has(`${pinfo.host}:${pinfo.port}`)) continue;
+        const id = crypto.createHash('sha1').update(`${pinfo.host}:${pinfo.port}`).digest('hex').slice(0, 32);
+        if (ignoredExtractedProxies.has(id) || ignoredExtractedProxies.has(`${pinfo.host}:${pinfo.port}`)) continue;
+        rows.push(proxyRow(id, { ...pinfo, isSaved: false, remark: pinfo.remark || `从档案 ${item.windowName || item.id} 提取` }));
+        seen.add(`${pinfo.host}:${pinfo.port}`);
+      }
+      return ok(res, pageOf(rows, query));
+    }
+
+    if (p === '/proxy/create') {
+      const value = officialProxyFromBody(body);
+      if (!value.host || !value.port) return err(res, 'host and port are required', 500);
+      const id = body.id ? String(body.id) : crypto.randomBytes(8).toString('hex');
+      ignoredExtractedProxies.delete(id);
+      ignoredExtractedProxies.delete(`${value.host}:${value.port}`);
+      proxyStore.set(id, value);
+      saveProxyStore();
+      return ok(res, { id, ...proxyRow(id, value) });
+    }
+
+    if (p === '/proxy/batch_create') {
+      const created = [];
+      const rawList = Array.isArray(body) ? body : (body.proxyList ?? body.proxies ?? body.list ?? []);
+      for (const item of rawList) {
+        const value = officialProxyFromBody(item);
+        if (!value.host || !value.port) continue;
+        const id = item.id ? String(item.id) : crypto.randomBytes(8).toString('hex');
+        ignoredExtractedProxies.delete(id);
+        ignoredExtractedProxies.delete(`${value.host}:${value.port}`);
+        proxyStore.set(id, value);
+        created.push(id);
+      }
+      saveProxyStore();
+      return ok(res, { createdCount: created.length, ids: created });
+    }
+
+    if (p === '/proxy/modify') {
+      if (!body.id || !proxyStore.has(String(body.id))) return err(res, 'proxy not found', 101);
+      const prev = proxyStore.get(String(body.id));
+      const updated = { ...prev, ...officialProxyFromBody(body), updateTime: nowText() };
+      proxyStore.set(String(body.id), updated);
+      saveProxyStore();
+      return ok(res, { id: String(body.id), ...proxyRow(String(body.id), updated) });
+    }
+
+    if (p === '/proxy/delete') {
+      const ids = idListOf(body.ids ?? body.id);
+      for (const id of ids) {
+        if (proxyStore.has(id)) {
+          const p = proxyStore.get(id);
+          if (p && p.host && p.port) ignoredExtractedProxies.add(`${p.host}:${p.port}`);
+          proxyStore.delete(id);
+        }
+        ignoredExtractedProxies.add(id);
+      }
+      saveProxyStore();
+      return ok(res, { deletedCount: ids.length });
+    }
+
+    if (p === '/proxy/detect') {
+      let host = String(body.host || '').trim();
+      let port = Number(body.port);
+      if ((!host || !port) && body.id && proxyStore.has(String(body.id))) {
+        const item = proxyStore.get(String(body.id));
+        host = item.host;
+        port = Number(item.port);
+      }
+      if (!host || !port) return ok(res, { checkStatus: 0, msg: '未指定目标主机与端口' });
+      const t0 = Date.now();
+      const checkPromise = new Promise((resolve) => {
+        const socket = net.createConnection({ host, port, timeout: 3500 }, () => {
+          const latency = Date.now() - t0;
+          socket.destroy();
+          resolve({ checkStatus: 1, msg: `TCP 连接成功 (${latency}ms)`, latency });
+        });
+        socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '连接超时 (3500ms)' }); });
+        socket.on('error', (e) => { resolve({ checkStatus: 2, msg: e.message || '连接失败' }); });
+      });
+      const checkResult = await checkPromise;
+      if (body.id && proxyStore.has(String(body.id))) {
+        const item = proxyStore.get(String(body.id));
+        item.checkStatus = checkResult.checkStatus;
+        item.checkTime = nowText();
+      }
+      return ok(res, checkResult);
+    }
+
+    if (p === '/account/create') {
+      const id = crypto.randomBytes(8).toString('hex');
+      const t = nowText();
+      accountStore.set(id, accountRow(id, body, { createTime: t, updateTime: t }));
+      return ok(res, { platform_id: id });
+    }
+
+    if (p === '/account/batch_create') {
+      for (const item of body.accountList ?? []) {
+        const id = crypto.randomBytes(8).toString('hex');
+        const t = nowText();
+        accountStore.set(id, accountRow(id, item, { createTime: t, updateTime: t }));
+      }
+      return ok(res);
+    }
+
+    if (p === '/account/modify') {
+      if (!body.id || !accountStore.has(String(body.id))) return err(res, 'account not found', 101);
+      const old = accountStore.get(String(body.id));
+      accountStore.set(String(body.id), accountRow(String(body.id), { ...old, ...body }, { createTime: old.createTime, updateTime: nowText() }));
+      return ok(res);
+    }
+    if (p === '/account/delete') {
+      idListOf(body.ids ?? body.id).forEach((id) => accountStore.delete(id));
+      return ok(res);
+    }
+    if (p === '/browser/show') {
+      const dirId = body.dirId ?? url.searchParams.get('dirId');
+      if (!dirId) return err(res, 'dirId is required');
+      let rec = running.get(dirId);
+      if (!rec) {
+        if (!hasProfile(dirId)) return err(res, '窗口/数据不存在');
+        const endpoint = await readDevTools(profileDir(dirId));
+        if (endpoint) rec = await recoverWindow(dirId, endpoint, false);
+      }
+      if (!rec) return err(res, 'window is not open');
+      const result = await showWindow(rec.port);
+      if (!result.ok) return err(res, `window restore failed: ${result.error ?? 'unknown error'}`, 500);
+      return ok(res, { dirId, port: rec.port, output: result.stdout.trim() });
+    }
+    if (p === '/browser/connection_info') {
+      const wanted = idListOf(query.dirIds ?? query.dirId ?? body.dirIds ?? body.dirId);
+      const rows = await localProfileRows();
+      const list = rows
+        .filter((item) => item.active && (!wanted.length || wanted.includes(item.id)))
+        .map((item, i) => handleOf(item.active, i + 1));
+      return ok(res, list);
+    }
     if (p === '/browser/close') {
-      if (!body.dirId) return err(res, 'dirId is required');
-      const closed = await closeWindow(body.dirId);
+      const dirId = body.dirId ?? body.id ?? query.dirId ?? query.id;
+      if (!dirId) return err(res, 'dirId is required');
+      const closed = await closeWindow(dirId);
       return closed ? ok(res) : err(res, 'window is not open');
     }
 
@@ -357,16 +941,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/browser/delete') {
-      if (!body.dirId) return err(res, 'dirId is required');
-      await closeWindow(body.dirId);
-      if (!isDirId(body.dirId)) return err(res, 'invalid dirId');
-      fs.rmSync(profileDir(body.dirId), { recursive: true, force: true });
+      const ids = idListOf(body.dirIds ?? body.dirId ?? body.ids ?? body.id ?? query.dirIds ?? query.dirId ?? query.id);
+      if (!ids.length) return err(res, 'dirIds is required');
+      for (const dirId of ids) {
+        await closeWindow(dirId);
+        if (!isDirId(dirId)) return err(res, 'invalid dirId');
+        fs.rmSync(profileDir(dirId), { recursive: true, force: true });
+      }
       return ok(res);
     }
-
     // read a profile's decrypted fingerprint (no secrets beyond what the caller owns)
     if (p === '/browser/fingerprint') {
-      const dirId = url.searchParams.get('dirId') ?? body.dirId;
+      const dirId = url.searchParams.get('dirId') ?? url.searchParams.get('id') ?? body.dirId ?? body.id;
       if (!hasProfile(dirId)) return err(res, '窗口/数据不存在');
       const fp = readFingerprint(dirId);
       if (body.full === true || url.searchParams.get('full') === '1') return ok(res, fp);
@@ -398,6 +984,7 @@ if (!PATHS.ok) {
   console.error('提示：可用 --data-dir <路径> 或环境变量 ROXY_HOME 手动指定数据目录。\n');
   process.exit(2);
 }
+loadProxyStore();
 
 server.listen(PORT, '127.0.0.1', () => {
   const s = (p) => show(p, FULL_PATHS);   // 默认把用户名换成 %USERPROFILE% 之类的占位符
@@ -410,5 +997,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[roxy-api] quota       : NONE — windows are resolved locally, no server call`);
   console.log(`[roxy-api] headless default: ${HEADLESS}   workbench default: ${WORKBENCH}`);
   console.log(`[roxy-api] default locale  : ${DEF_LOCALE ?? '(none — inherit template)'}`);
+  console.log(`[roxy-api] proxy store    : ${proxyStore.size} item(s) loaded`);
   if (!FULL_PATHS) console.log(`[roxy-api] 路径已脱敏显示，加 --full-paths 看真实路径`);
 });

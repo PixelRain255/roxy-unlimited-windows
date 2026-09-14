@@ -19,6 +19,9 @@
 
 ```
 README.md                    本文件
+start-webui.bat              双击一键启动 WebUI
+scripts/start-webui.ps1      WebUI 启动器与服务参数
+scripts/webui/index.html       零依赖本机控制台页面
 MANUAL-zh.md                 完整手册（原理 + 方法 + API + 六个坑）  ← 先看这个
 TECHNICAL-zh.md              技术详解（含逆向依据、源码位置、已证伪结论附录）
 
@@ -65,6 +68,44 @@ $h | Format-List dirId, http, ws, driver, locale, timeZone, pid
 # 4) 全关
 Invoke-RestMethod -Uri "$API/browser/close_all" -Method POST -ContentType "application/json" -Body '{}'
 ```
+
+## WebUI 一键启动
+
+仓库新增了一个零依赖的本机 WebUI，页面直接挂在本地 API 根路径。双击仓库根目录的 `start-webui.bat`，脚本会在后台启动 API、等待健康检查通过，然后打开：
+
+```text
+http://127.0.0.1:50001/
+```
+
+也可以在 PowerShell 中显式启动：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-webui.ps1
+```
+
+启动脚本支持这些选项：
+
+| 选项 | 默认 | 说明 |
+|---|---:|---|
+| `-Port` | `50000` | WebUI / API 监听端口（与官方默认端口一致） |
+| `-AppPort` | `45535` | 工作台端口 |
+| `-DataDir` | 自动发现 | 手动指定数据目录 |
+| `-InstallDir` | 自动发现 | 手动指定安装目录 |
+| `-Locale` | 跟随模板 | API 默认语言 |
+| `-ApiKey` | 空 | 可选 API token；服务端接受 `token` / `x-api-key` / `Bearer` Header |
+| `-HeadlessDefault` | 关闭 | 新窗口默认无头 |
+| `-WorkbenchDefault` | 关闭 | 新窗口默认打开工作台 |
+| `-FullPaths` | 关闭 | 日志显示完整路径 |
+| `-NoBrowser` | 关闭 | 只启动服务，不打开浏览器 |
+| `-Background` | 关闭 | 隐藏 Node 控制台窗口 |
+
+## 官方 API 兼容
+
+本地 API 按官方公开文档的调用方式提供兼容层：默认监听 `127.0.0.1:50000`，接受 `workspaceId`、`fingerInfo`、`proxyInfo`、`defaultOpenUrl`、`args` 等官方字段。已覆盖 `workspace`、`account`、`label`、`list_v3`、`detail`、`template`、`create`、`mdf`、`open`、`close`、`delete`、`random_env`、`connection_info`、缓存和基础 proxy/account 接口。
+
+官方文档要求 API key；本地服务默认不强制鉴权以兼容现有 WebUI。需要完全按官方方式传 token 时，启动时使用 `-ApiKey` 或设置 `ROXY_API_KEY`，请求可使用 `token`、`x-api-key`、`api-key` 或 `Authorization: Bearer ...`。WebUI 使用 `?apiKey=...` 读取该 token。
+
+官方兼容文档：`https://roxybrowser.com/docs/api-documentation/api-reference.html`。`/browser/show`、`/browser/fingerprint`、`/meta/info` 和根路径 WebUI 是本项目的本地扩展。
 
 ## 前置条件
 

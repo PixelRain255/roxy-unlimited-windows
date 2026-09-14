@@ -1,0 +1,1732 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Roxy Local Control - 本地档案与代理池控制台</title>
+  <style>
+    :root {
+      --bg: #0d1111;
+      --surface: #151b1a;
+      --surface-2: #1b2422;
+      --surface-3: #222d2a;
+      --line: #2d3b37;
+      --text: #edf5f1;
+      --muted: #8fa49c;
+      --accent: #5bd5b3;
+      --accent-strong: #30b18d;
+      --blue: #8bbcf0;
+      --amber: #efb866;
+      --danger: #e77d73;
+      --success: #75d49a;
+      --shadow: 0 18px 50px rgba(0,0,0,.24);
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(40,73,65,.22), transparent 340px), var(--bg);
+      font: 14px/1.5 "Segoe UI", "Microsoft YaHei", -apple-system, sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    .shell { width: min(1520px, calc(100% - 40px)); margin: 0 auto; padding: 20px 0 40px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 4px 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(91,213,179,.7);
+      background: rgba(91,213,179,.1);
+      color: var(--accent);
+      font-weight: 750;
+    }
+    .brand-name { font-size: 16px; font-weight: 700; letter-spacing: .08em; white-space: nowrap; }
+    .brand-sub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .top-actions { display: flex; align-items: center; gap: 12px; }
+    .api-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 0 4px rgba(239,184,102,.12);
+    }
+    .state-dot.ok { background: var(--success); box-shadow: 0 0 0 4px rgba(117,212,154,.12); }
+    .state-dot.error { background: var(--danger); box-shadow: 0 0 0 4px rgba(231,125,115,.12); }
+    .notice {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin: 18px 0;
+      padding: 12px 16px;
+      border: 1px solid rgba(239,184,102,.36);
+      background: rgba(239,184,102,.08);
+      color: #efd7a9;
+    }
+    .notice-icon { color: var(--amber); font-weight: 700; }
+    .notice strong { display: block; color: #f6dfb3; font-size: 13px; }
+    .notice span { display: block; margin-top: 2px; color: #c2ad87; font-size: 12px; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(390px, .85fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: rgba(21,27,26,.94);
+      box-shadow: var(--shadow);
+    }
+    .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-title { margin: 0; font-size: 15px; font-weight: 700; }
+    .panel-kicker { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+    .panel-body { padding: 18px 20px 20px; }
+    .stack { display: grid; gap: 18px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
+    .metric { padding: 14px 16px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric-label { color: var(--muted); font-size: 11px; }
+    .metric-value { margin-top: 3px; color: var(--text); font-size: 20px; font-weight: 700; }
+    .metric-value.accent { color: var(--accent); }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+    .field { min-width: 0; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { display: block; margin-bottom: 6px; color: #c6d5cf; font-size: 12px; font-weight: 600; }
+    .field-hint { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      outline: 0;
+      color: var(--text);
+      background: var(--surface-2);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input, select { height: 38px; padding: 0 11px; }
+    textarea { min-height: 76px; padding: 9px 11px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent-strong);
+      box-shadow: 0 0 0 3px rgba(91,213,179,.1);
+    }
+    input::placeholder, textarea::placeholder { color: #687c74; }
+    .inline { display: flex; gap: 8px; align-items: center; }
+    .inline > * { min-width: 0; }
+    .suffix { color: var(--muted); white-space: nowrap; font-size: 12px; }
+    .split-3 { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 8px; }
+    .split-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .hidden { display: none !important; }
+    .toggle-row { display: flex; flex-wrap: wrap; gap: 9px 16px; align-items: center; min-height: 38px; }
+    .toggle { display: inline-flex; align-items: center; gap: 8px; color: #c6d5cf; cursor: pointer; font-size: 12px; }
+    .toggle input { width: 16px; height: 16px; accent-color: var(--accent-strong); }
+    .section-label {
+      grid-column: 1 / -1;
+      margin-top: 2px;
+      padding-bottom: 7px;
+      border-bottom: 1px solid var(--line);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .form-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 9px;
+      margin-top: 18px;
+      padding-top: 15px;
+      border-top: 1px solid var(--line);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 36px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: #dbe8e3;
+      background: var(--surface-3);
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+      transition: all .15s;
+    }
+    .btn:hover { border-color: #557069; background: #2a3834; }
+    .btn-primary { border-color: var(--accent-strong); color: #071411; background: var(--accent); }
+    .btn-primary:hover { border-color: #75e1c4; background: #75e1c4; }
+    .btn-danger { border-color: rgba(231,125,115,.45); color: #f1b7b1; background: rgba(231,125,115,.08); }
+    .btn-danger:hover { background: rgba(231,125,115,.18); }
+    .btn-quiet { color: var(--muted); background: transparent; }
+    .btn-quiet:hover { color: var(--text); background: rgba(255,255,255,.05); }
+    .btn-icon { display: inline-grid; place-items: center; min-width: 14px; font-size: 14px; line-height: 1; }
+    .icon-only { width: 34px; min-width: 34px; padding: 0; }
+    .service-list { display: grid; gap: 0; }
+    .service-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(45,59,55,.7);
+    }
+    .service-row:last-child { border-bottom: 0; }
+    .service-key { color: var(--muted); font-size: 12px; }
+    .service-value {
+      overflow: hidden;
+      color: #dce9e4;
+      font-size: 12px;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    code { color: var(--blue); font-family: Consolas, monospace; font-size: 12px; }
+    .profiles-panel { grid-column: 1 / -1; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; min-width: 820px; border-collapse: collapse; }
+    th { padding: 11px 12px; color: var(--muted); font-size: 11px; font-weight: 650; text-align: left; white-space: nowrap; }
+    td { padding: 11px 12px; border-top: 1px solid rgba(45,59,55,.74); color: #d8e5e0; font-size: 12px; vertical-align: middle; }
+    tr:hover td { background: rgba(91,213,179,.035); }
+    .profile-name { color: var(--text); font-weight: 650; }
+    .profile-id { margin-top: 3px; color: #70847c; font-family: Consolas, monospace; font-size: 10px; }
+    .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .status-pill.open { border-color: rgba(117,212,154,.35); color: var(--success); background: rgba(117,212,154,.08); }
+    .status-pill.closed { color: #9cafa6; }
+    .status-pill .state-dot { width: 6px; height: 6px; box-shadow: none; }
+    .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .row-actions .btn { min-height: 28px; padding: 0 9px; font-size: 11px; }
+    .empty { padding: 38px 20px; color: var(--muted); text-align: center; }
+    .empty strong { display: block; margin-bottom: 4px; color: #cbd9d3; font-size: 13px; }
+    .activity { max-height: 260px; overflow: auto; padding: 13px 20px 16px; }
+    .log-line { display: flex; gap: 9px; padding: 5px 0; color: var(--muted); font-family: Consolas, monospace; font-size: 11px; }
+    .log-time { color: #60756d; }
+    .log-line.success .log-message { color: var(--success); }
+    .log-line.error .log-message { color: var(--danger); }
+    .log-line.info .log-message { color: #bfd0c9; }
+    dialog {
+      width: min(760px, calc(100% - 28px));
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 28px 90px rgba(0,0,0,.55);
+    }
+    dialog::backdrop { background: rgba(4,8,8,.72); }
+    .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin: 0; font-size: 15px; }
+    .dialog-body { padding: 16px 18px 18px; }
+    pre {
+      max-height: 52vh;
+      overflow: auto;
+      margin: 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: #cfe2d9;
+      background: #101615;
+      font: 12px/1.6 Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; background: rgba(91,213,179,.16); color: var(--accent); }
+    .badge-tag { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .tag-socks5 { background: rgba(91,213,179,.16); color: var(--accent); }
+    .tag-http { background: rgba(139,188,240,.16); color: var(--blue); }
+    .tag-https { background: rgba(239,184,102,.16); color: var(--amber); }
+    .proxy-card { border: 1px solid var(--line); background: var(--surface-2); padding: 16px; border-radius: 4px; margin-bottom: 16px; }
+    .proxy-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .proxy-card-title { font-weight: 700; font-size: 13px; color: #cfe0d9; display: flex; align-items: center; gap: 8px; }
+    .test-result-ok { color: var(--success); font-weight: 600; }
+    .test-result-err { color: var(--danger); font-weight: 600; }
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 99;
+      max-width: min(420px, calc(100% - 44px));
+      padding: 12px 15px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      color: #dcebe5;
+      background: #18211f;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: opacity .18s, transform .18s;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { border-left-color: var(--danger); }
+
+    /* 选项卡与自选代理样式 */
+    .view-tabs { display: flex; gap: 6px; align-items: center; }
+    .view-tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-bottom: none;
+      border-radius: 4px 4px 0 0;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .view-tab-btn:hover { color: var(--text); background: var(--surface-3); }
+    .view-tab-btn.active {
+      color: var(--accent);
+      background: var(--surface);
+      border-color: var(--accent-strong) var(--line) transparent;
+      border-top: 2px solid var(--accent);
+    }
+    .tab-view { display: block; }
+    .tab-actions { display: flex; align-items: center; gap: 8px; }
+    .selected-proxy-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(91,213,179,.18);
+      color: var(--accent);
+      border: 1px solid rgba(91,213,179,.4);
+    }
+    tr.is-selected-proxy td {
+      background: rgba(91,213,179,.06);
+    }
+    .selected-banner-card {
+      margin-top: 6px;
+      padding: 8px 12px;
+      background: var(--surface-3);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+      .profiles-panel { grid-column: auto; }
+    }
+    @media (max-width: 640px) {
+      .shell { width: min(100% - 24px, 1520px); padding-top: 12px; }
+      .topbar { align-items: flex-start; flex-direction: column; gap: 14px; }
+      .top-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+      .notice { margin: 14px 0; }
+      .panel-head, .panel-body { padding-left: 14px; padding-right: 14px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .field.full, .section-label { grid-column: auto; }
+      .metrics { grid-template-columns: 1fr 1fr 1fr; }
+      .metric { padding: 12px 10px; }
+      .metric-value { font-size: 17px; }
+      .form-actions { justify-content: stretch; }
+      .form-actions .btn { flex: 1; }
+      .split-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <div>
+          <div class="brand-name">ROXY LOCAL CONTROL</div>
+          <div class="brand-sub">本机档案与代理池控制台</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="openProxyTabBtn" class="btn" type="button" title="查看并管理代理池列表">
+          <span class="btn-icon">⚡</span>自选代理池 <span id="proxyCountBadge" class="badge">0</span>
+        </button>
+        <div class="api-state">
+          <span id="stateDot" class="state-dot"></span>
+          <span id="stateText">正在连接本机 API</span>
+        </div>
+        <button id="refreshTop" class="btn icon-only" type="button" title="刷新全部数据" aria-label="刷新全部数据">
+          <span class="btn-icon">R</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="notice">
+      <div class="notice-icon" aria-hidden="true">!</div>
+      <div>
+        <strong>仅限本机、本人或已获授权的环境使用</strong>
+        <span>此页面只调用 127.0.0.1 上的本地 API，不提供云同步或服务端配额管理。支持多代理节点批量添加、TCP连通性测速与自定义挑选。</span>
+      </div>
+    </div>
+
+    <main class="workspace">
+      <!-- 新建档案面板 -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h1 class="panel-title">新建档案</h1>
+            <p class="panel-kicker">一次配置，可批量生成并按需绑定自选代理</p>
+          </div>
+          <span class="status-pill"><span class="state-dot ok"></span>离线生成</span>
+        </div>
+        <div class="panel-body">
+          <form id="createForm">
+            <div class="form-grid">
+              <div class="section-label">标识与批量</div>
+              <div class="field">
+                <label for="windowName">窗口名称</label>
+                <input id="windowName" type="text" placeholder="例如 research-01">
+                <div class="field-hint">批量创建时会自动追加 -01、-02。</div>
+              </div>
+              <div class="field">
+                <label for="batchCount">创建数量</label>
+                <div class="inline">
+                  <input id="batchCount" type="number" min="1" max="50" value="1">
+                  <span class="suffix">个</span>
+                </div>
+              </div>
+              <div class="field">
+                <label for="batchDelay">批量间隔</label>
+                <div class="inline">
+                  <input id="batchDelay" type="number" min="0" max="10000" value="300">
+                  <span class="suffix">毫秒</span>
+                </div>
+              </div>
+              <div class="field">
+                <label for="fromProfile">结构模板</label>
+                <select id="fromProfile">
+                  <option value="">最近档案（自动）</option>
+                </select>
+              </div>
+
+              <div class="section-label">语言与设备</div>
+              <div class="field">
+                <label for="locale">语言预设</label>
+                <select id="locale">
+                  <option value="">跟随模板</option>
+                </select>
+              </div>
+              <div id="customLocaleField" class="field hidden">
+                <label for="customLocale">自定义语言</label>
+                <input id="customLocale" type="text" placeholder="例如 en-CA">
+              </div>
+              <div class="field">
+                <label for="timeZone">时区</label>
+                <input id="timeZone" type="text" placeholder="留空使用语言预设，例如 Asia/Shanghai">
+              </div>
+              <div class="field">
+                <label for="acceptLang">Accept-Language</label>
+                <input id="acceptLang" type="text" placeholder="留空使用语言预设，例如 zh-CN,zh,en">
+              </div>
+              <div class="field">
+                <label for="os">系统画像</label>
+                <select id="os">
+                  <option value="">随机 Windows 10 / 11</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="screen">屏幕分辨率</label>
+                <select id="screen">
+                  <option value="">随机分辨率</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+              <div id="customScreenField" class="field full hidden">
+                <label>自定义分辨率</label>
+                <div class="split-2">
+                  <input id="screenWidth" type="number" min="640" max="7680" placeholder="宽度">
+                  <input id="screenHeight" type="number" min="480" max="4320" placeholder="高度">
+                </div>
+              </div>
+
+              <div class="section-label">代理与启动</div>
+              <div class="field full">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                  <label for="proxyMode" style="margin-bottom:0">网络代理选项 (支持自选代理池)</label>
+                  <button id="jumpToProxyListBtn" class="btn btn-quiet" type="button" style="padding:0;min-height:auto;font-size:11px;color:var(--accent);text-decoration:underline">
+                    ⚡ 查看下方代理池列表
+                  </button>
+                </div>
+                <select id="proxyMode">
+                  <option value="direct">直连 direct (无代理)</option>
+                  <option value="custom">自定义手动输入</option>
+                  <optgroup id="proxySelectGroup" label="自选代理池 (已保存列表)"></optgroup>
+                </select>
+                <!-- 当前选中状态条 -->
+                <div id="proxySelectedHint" class="selected-banner-card">
+                  <span id="proxyHintText" style="font-size:12px;color:var(--muted)">当前为直连模式，无外部代理。</span>
+                  <div style="display:flex;gap:6px">
+                    <button id="quickTestProxyBtn" class="btn btn-quiet hidden" type="button" style="padding:2px 8px;min-height:24px;font-size:11px">
+                      <span class="btn-icon">⚡</span>测试此代理
+                    </button>
+                    <button id="quickClearProxyBtn" class="btn btn-quiet hidden" type="button" style="padding:2px 8px;min-height:24px;font-size:11px">
+                      ✕ 切换直连
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="field full"><label for="startUrl">启动页</label><input id="startUrl" type="text" value="about:blank" placeholder="https://example.com"></div>
+              
+              <!-- 自定义代理参数输入区 (当选择自定义时显示) -->
+              <div id="proxyFields" class="field full hidden">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                  <label style="margin-bottom:0">代理连接参数</label>
+                  <span id="quickDetectResult" style="font-size:11px;color:var(--muted)"></span>
+                </div>
+                <div class="split-3">
+                  <select id="proxyType">
+                    <option value="socks5">socks5</option>
+                    <option value="http">http</option>
+                    <option value="https">https</option>
+                  </select>
+                  <input id="proxyHost" type="text" placeholder="主机地址 (如 127.0.0.1)">
+                  <input id="proxyPort" type="number" min="1" max="65535" placeholder="端口 (如 1080)">
+                </div>
+                <div class="split-2" style="margin-top:8px">
+                  <input id="proxyUser" type="text" placeholder="用户名（可选）">
+                  <input id="proxyPass" type="password" placeholder="密码（可选）">
+                </div>
+              </div>
+
+              <div class="field full">
+                <label for="portScanWhiteList">本地端口白名单</label>
+                <input id="portScanWhiteList" type="text" placeholder="由 API 自动补齐">
+                <div class="field-hint">多个端口用分号分隔。保留 API 端口和工作台端口，避免本地页面不可达。</div>
+              </div>
+              <div class="field full">
+                <label for="extraArgs">额外 Chromium 参数</label>
+                <textarea id="extraArgs" placeholder="每行一个，例如：&#10;--disable-notifications&#10;--window-position=0,0"></textarea>
+                <div class="field-hint">只传入你明确理解的参数；空行会被忽略。</div>
+              </div>
+              <div class="field full">
+                <div class="toggle-row">
+                  <label class="toggle"><input id="openAfterCreate" type="checkbox" checked> 创建后启动</label>
+                  <label class="toggle"><input id="headless" type="checkbox"> 无头模式</label>
+                  <label class="toggle"><input id="workbench" type="checkbox"> 打开工作台</label>
+                  <label class="toggle"><input id="useGpu" type="checkbox" checked> 使用 GPU</label>
+                </div>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="resetForm" class="btn btn-quiet" type="button"><span class="btn-icon">x</span>重置表单</button>
+              <button id="createButton" class="btn btn-primary" type="submit"><span class="btn-icon">+</span>创建档案</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- 服务状态与操作日志侧边栏 -->
+      <aside class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">服务状态</h2>
+              <p class="panel-kicker">当前 WebUI 连接的本机实例</p>
+            </div>
+            <button id="closeAll" class="btn btn-danger" type="button"><span class="btn-icon">x</span>全部关闭</button>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">档案总数</div>
+              <div id="profileCount" class="metric-value">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">运行中</div>
+              <div id="openCount" class="metric-value accent">-</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">内核版本</div>
+              <div id="coreVersion" class="metric-value">-</div>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="service-list">
+              <div class="service-row">
+                <span class="service-key">API 地址</span>
+                <span id="apiAddress" class="service-value"><code>-</code></span>
+              </div>
+              <div class="service-row">
+                <span class="service-key">工作台端口</span>
+                <span id="appPort" class="service-value">-</span>
+              </div>
+              <div class="service-row">
+                <span class="service-key">默认语言</span>
+                <span id="defaultLocale" class="service-value">跟随模板</span>
+              </div>
+              <div class="service-row">
+                <span class="service-key">默认模式</span>
+                <span id="defaultMode" class="service-value">-</span>
+              </div>
+              <div class="service-row">
+                <span class="service-key">代理池节点</span>
+                <span id="poolSummary" class="service-value">0 个就绪</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">操作记录</h2>
+              <p class="panel-kicker">只保存在当前页面，不写入磁盘</p>
+            </div>
+            <button id="clearLog" class="btn icon-only" type="button" title="清空操作记录" aria-label="清空操作记录">
+              <span class="btn-icon">x</span>
+            </button>
+          </div>
+          <div id="activity" class="activity">
+            <div class="log-line info">
+              <span class="log-time">--:--:--</span>
+              <span class="log-message">等待连接本机 API</span>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <!-- 底部控制中心：自选代理池列表 与 本地档案切换 -->
+      <section class="panel profiles-panel" id="bottomControlPanel">
+        <div class="panel-head" style="align-items:center;flex-wrap:wrap;gap:12px;padding:12px 20px">
+          <div class="view-tabs" role="tablist">
+            <button id="tabBtnProxies" class="view-tab-btn active" type="button">
+              <span class="btn-icon">⚡</span>代理池自选列表 <span id="proxyTabBadge" class="badge">0</span>
+            </button>
+            <button id="tabBtnProfiles" class="view-tab-btn" type="button">
+              <span class="btn-icon">📂</span>本地档案列表 <span id="profileTabBadge" class="badge">0</span>
+            </button>
+          </div>
+          <!-- 代理池视图工具栏 -->
+          <div id="proxyTabToolbar" class="tab-actions">
+            <button id="btnToggleBatchAdd" class="btn btn-primary" type="button">
+              <span class="btn-icon">+</span>批量添加多个代理
+            </button>
+            <button id="btnToggleSingleAdd" class="btn" type="button">
+              <span class="btn-icon">+</span>单条添加
+            </button>
+            <button id="btnTestAllProxies" class="btn" type="button" title="测试列表中全部节点的连通性与延迟">
+              <span class="btn-icon">⚡</span>全部测速
+            </button>
+            <button id="btnRefreshProxiesMain" class="btn icon-only" type="button" title="刷新代理池列表">
+              <span class="btn-icon">R</span>
+            </button>
+          </div>
+          <!-- 档案视图工具栏 -->
+          <div id="profileTabToolbar" class="tab-actions hidden">
+            <button id="refreshProfiles" class="btn" type="button">
+              <span class="btn-icon">R</span>刷新档案列表
+            </button>
+          </div>
+        </div>
+
+        <!-- 代理池自选列表视图 -->
+        <div id="viewProxies" class="tab-view">
+          <!-- 批量添加面板 (可折叠) -->
+          <div id="batchAddPanel" class="proxy-card hidden" style="margin:16px 20px 0;border-left:3px solid var(--accent)">
+            <div class="proxy-card-head">
+              <div class="proxy-card-title">
+                <span class="btn-icon">📋</span>批量添加多个代理选项（支持多行输入与智能解析）
+              </div>
+              <button id="closeBatchAddBtn" class="btn icon-only" type="button" title="收起" style="width:24px;min-width:24px;height:24px;min-height:24px;padding:0">
+                <span class="btn-icon">x</span>
+              </button>
+            </div>
+            <p style="margin:0 0 10px;color:var(--muted);font-size:12px">
+              支持粘贴批量代理列表，每行一条。自动识别：<code>host:port</code>、<code>host:port:user:pass</code>、<code>socks5://user:pass@host:port#备注</code>、<code>http://host:port#备注</code>。
+            </p>
+            <textarea id="batchProxyText" style="height:125px;font-family:Consolas,monospace;font-size:12px" placeholder="在此粘贴多个代理，一行一条：&#10;127.0.0.1:1080&#10;45.76.12.34:1080:myuser:mypass&#10;socks5://admin:123456@192.168.1.100:1080#香港专线01&#10;http://192.168.1.101:8080#美国节点02"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:10px">
+              <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <div style="display:flex;gap:6px;align-items:center">
+                  <label for="batchDefaultProto" style="margin:0;font-size:12px;color:var(--muted)">缺省协议：</label>
+                  <select id="batchDefaultProto" style="height:32px;width:105px;padding:0 8px">
+                    <option value="socks5">SOCKS5</option>
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                  </select>
+                </div>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <label for="batchRemarkPrefix" style="margin:0;font-size:12px;color:var(--muted)">默认备注：</label>
+                  <input id="batchRemarkPrefix" type="text" value="节点" style="height:32px;width:110px;padding:0 8px" placeholder="备注前缀">
+                </div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button id="btnCancelBatch" class="btn btn-quiet" type="button">取消</button>
+                <button id="btnSubmitBatch" class="btn btn-primary" type="button">
+                  <span class="btn-icon">🚀</span>立即批量导入并保存
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 单条添加面板 (可折叠) -->
+          <div id="singleAddPanel" class="proxy-card hidden" style="margin:16px 20px 0;border-left:3px solid var(--blue)">
+            <div class="proxy-card-head">
+              <div class="proxy-card-title"><span class="btn-icon">+</span>单条添加代理节点</div>
+              <button id="closeSingleAddBtn" class="btn icon-only" type="button" title="收起" style="width:24px;min-width:24px;height:24px;min-height:24px;padding:0">
+                <span class="btn-icon">x</span>
+              </button>
+            </div>
+            <div style="margin-bottom:10px">
+              <input id="mainSinglePaste" type="text" placeholder="💡 快速粘贴解析（如 socks5://user:pass@127.0.0.1:1080 或 127.0.0.1:7890:u:p）输入后自动拆分">
+            </div>
+            <div class="form-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 14px">
+              <div class="field">
+                <label for="mainSingleRemark">备注名称</label>
+                <input id="mainSingleRemark" type="text" placeholder="例如：本地Clash / 香港原生01">
+              </div>
+              <div class="field">
+                <label for="mainSingleProto">协议</label>
+                <select id="mainSingleProto">
+                  <option value="socks5">SOCKS5</option>
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="mainSingleHost">主机地址 (IP/域名)</label>
+                <input id="mainSingleHost" type="text" placeholder="例如：127.0.0.1">
+              </div>
+              <div class="field">
+                <label for="mainSinglePort">端口</label>
+                <input id="mainSinglePort" type="number" min="1" max="65535" placeholder="例如：1080">
+              </div>
+              <div class="field">
+                <label for="mainSingleUser">用户名（可选）</label>
+                <input id="mainSingleUser" type="text" placeholder="可选用户名">
+              </div>
+              <div class="field">
+                <label for="mainSinglePass">密码（可选）</label>
+                <input id="mainSinglePass" type="password" placeholder="可选密码">
+              </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+              <span id="mainSingleDetectStatus" style="font-size:12px;color:var(--muted)">填入主机和端口后可测试连通性</span>
+              <div style="display:flex;gap:8px">
+                <button id="mainSingleTestBtn" class="btn" type="button"><span class="btn-icon">⚡</span>测试连接</button>
+                <button id="mainSingleSaveBtn" class="btn btn-primary" type="button"><span class="btn-icon">+</span>保存到代理池</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 代理列表表格区域 -->
+          <div id="mainProxyTableWrap" class="table-wrap">
+            <div class="empty"><strong>正在加载代理列表...</strong></div>
+          </div>
+        </div>
+
+        <!-- 本地档案视图 -->
+        <div id="viewProfiles" class="tab-view hidden">
+          <div id="profilesContent" class="table-wrap">
+            <div class="empty"><strong>正在读取档案</strong>请稍候</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 指纹详情对话框 -->
+  <dialog id="detailsDialog">
+    <div class="dialog-head">
+      <h2 id="dialogTitle">指纹详情</h2>
+      <button id="closeDialog" class="btn icon-only" type="button" title="关闭" aria-label="关闭"><span class="btn-icon">x</span></button>
+    </div>
+    <div class="dialog-body"><pre id="fingerprintOutput">正在读取...</pre></div>
+  </dialog>
+
+  <!-- 提示消息浮层 -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const API = location.protocol === 'http:' || location.protocol === 'https:' ? location.origin : 'http://127.0.0.1:50000';
+      const UI_TOKEN = new URLSearchParams(location.search).get('apiKey') || '';
+      const state = { meta: {}, rows: [], connections: [], proxies: [] };
+      let toastTimer;
+
+      const $ = (id) => document.getElementById(id);
+
+      function escapeHtml(str) {
+        return String(str ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function log(message, type = 'info') {
+        const wrap = $('activity');
+        const line = document.createElement('div');
+        line.className = `log-line ${type}`;
+        line.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span><span class="log-message">${escapeHtml(message)}</span>`;
+        wrap.prepend(line);
+        while (wrap.children.length > 50) wrap.removeChild(wrap.lastChild);
+      }
+
+      function toast(message, isError = false) {
+        const node = $('toast');
+        node.textContent = message;
+        node.className = `toast${isError ? ' error' : ''}`;
+        node.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => node.classList.remove('show'), 3200);
+      }
+
+      function setState(kind, text) {
+        $('stateDot').className = `state-dot ${kind}`;
+        $('stateText').textContent = text;
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(`${API}${path}`, {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(UI_TOKEN ? { token: UI_TOKEN } : {}),
+            ...(options.headers || {})
+          }
+        });
+        let payload;
+        try {
+          payload = await response.json();
+        } catch {
+          throw new Error(`API 返回了无效响应（${response.status}）`);
+        }
+        if (!response.ok || payload.code !== 0) throw new Error(payload.msg || `请求失败（${response.status}）`);
+        return payload.data;
+      }
+
+      function option(select, value, label) {
+        const node = document.createElement('option');
+        node.value = value;
+        node.textContent = label;
+        select.appendChild(node);
+      }
+
+      function shortId(val) {
+        return val ? String(val).slice(0, 8) : '';
+      }
+
+      // ---------- 代理智能解析函数 ----------
+      function parseSmartProxy(raw) {
+        let str = String(raw || '').trim();
+        if (!str || str.startsWith('//')) return null;
+
+        let type = 'socks5';
+        let host = '';
+        let port = '';
+        let user = '';
+        let pass = '';
+        let remark = '';
+
+        if (str.includes('#')) {
+          const hashIdx = str.indexOf('#');
+          remark = str.slice(hashIdx + 1).trim();
+          str = str.slice(0, hashIdx).trim();
+        }
+
+        const protoMatch = /^([a-zA-Z0-9]+):\/\/(.*)$/.exec(str);
+        if (protoMatch) {
+          type = protoMatch[1].toLowerCase();
+          str = protoMatch[2];
+        }
+        const atIdx = str.lastIndexOf('@');
+        if (atIdx !== -1) {
+          const authPart = str.slice(0, atIdx);
+          str = str.slice(atIdx + 1);
+          const colonIdx = authPart.indexOf(':');
+          if (colonIdx !== -1) {
+            user = decodeURIComponent(authPart.slice(0, colonIdx));
+            pass = decodeURIComponent(authPart.slice(colonIdx + 1));
+          } else {
+            user = decodeURIComponent(authPart);
+          }
+        }
+        const delimiter = str.includes(',') ? ',' : (str.includes('\t') ? '\t' : ':');
+        const parts = str.split(delimiter);
+        if (parts.length >= 2) {
+          host = parts[0].trim();
+          port = parts[1].trim();
+          if (parts.length >= 4 && !user) {
+            user = parts[2].trim();
+            pass = parts[3].trim();
+          }
+        }
+        if (!host || !port || isNaN(Number(port))) return null;
+        return {
+          type: ['http', 'https', 'socks5'].includes(type) ? type : 'socks5',
+          host,
+          port: String(port),
+          user,
+          pass,
+          remark,
+        };
+      }
+
+      function parseBatchProxyText(text, defaultProto = 'socks5', defaultRemark = '节点') {
+        const lines = String(text || '').split(/\r?\n/);
+        const result = [];
+        let idx = 1;
+        for (let line of lines) {
+          line = line.trim();
+          if (!line || line.startsWith('//')) continue;
+          const parsed = parseSmartProxy(line);
+          if (parsed && parsed.host && parsed.port) {
+            result.push({
+              protocol: parsed.type || defaultProto,
+              host: parsed.host,
+              port: parsed.port,
+              proxyUserName: parsed.user || '',
+              proxyPassword: parsed.pass || '',
+              remark: parsed.remark || `${defaultRemark}-${idx}`
+            });
+            idx++;
+          }
+        }
+        return result;
+      }
+
+      function populateMeta(meta) {
+        const locale = $('locale');
+        locale.innerHTML = '';
+        option(locale, '', '跟随模板');
+        Object.keys(meta?.locales || {}).forEach((key) => option(locale, key, key));
+        option(locale, '__custom__', '自定义语言');
+
+        const screen = $('screen');
+        screen.innerHTML = '';
+        option(screen, '', '随机分辨率');
+        (meta?.screens || []).forEach((item) => {
+          const value = `${item.width}x${item.height}`;
+          option(screen, value, `${value} · ${item.description}`);
+        });
+        option(screen, 'custom', '自定义分辨率');
+
+        const os = $('os');
+        os.innerHTML = '';
+        option(os, '', '随机 Windows 10 / 11');
+        (meta?.operatingSystems || []).forEach((item) => option(os, item.value, item.label));
+
+        const fromProfile = $('fromProfile');
+        fromProfile.innerHTML = '';
+        option(fromProfile, '', '最近档案（自动）');
+        (meta?.recentProfiles || []).forEach((item) => {
+          option(fromProfile, item.dirId, `${item.windowName || item.dirId} · ${item.windowMode || 'manual'}`);
+        });
+      }
+
+      function populateService(info) {
+        $('profileCount').textContent = String(info.profileCount ?? '-');
+        $('openCount').textContent = String(info.openCount ?? '-');
+        $('coreVersion').textContent = info.coreVersion ? `v${info.coreVersion}` : '未找到';
+        $('apiAddress').innerHTML = `<code>${escapeHtml(info.apiUrl || API)}</code>`;
+        $('appPort').textContent = String(info.appPort ?? '-');
+        $('defaultLocale').textContent = info.defaultLocale || '跟随模板';
+        $('defaultMode').textContent = `${info.headlessDefault ? 'headless' : 'headful'} · ${info.workbenchDefault ? 'workbench' : 'noworkbench'}`;
+      }
+
+      function formatProxyCell(fp) {
+        const p = fp?.fproxy;
+        if (!p || !p.host) return '<span style="color:var(--muted)">直连</span>';
+        const type = (p.type || p.protocol || 'socks5').toUpperCase();
+        return `<code>[${escapeHtml(type)}] ${escapeHtml(p.host)}:${escapeHtml(p.port || '')}</code>`;
+      }
+
+      function renderRows() {
+        const wrap = $('profilesContent');
+        const rows = state.rows || [];
+        $('profileTabBadge').textContent = rows.length;
+        if (rows.length === 0) {
+          wrap.innerHTML = '<div class="empty"><strong>暂无本地档案</strong>在上方创建你的第一个档案。</div>';
+          return;
+        }
+        const rowsHtml = rows.map((row) => {
+          const dirId = row.dirId || row.id;
+          const isOpen = row.openStatus === 1 || Boolean(row.openStatus);
+          const name = row.windowName || row.name || dirId;
+          const coreVer = row.coreVersion ? `v${row.coreVersion}` : '-';
+          const mode = row.windowMode || '-';
+          const proxyText = formatProxyCell(row.fp);
+          const langText = row.fp?.appLocale || '<span style="color:var(--muted)">跟随系统</span>';
+          const screen = row.fp?.screen ? `${row.fp.screen.width}x${row.fp.screen.height}` : '-';
+
+          return `<tr>
+            <td>
+              <div class="profile-name">${escapeHtml(name)}</div>
+              <div class="profile-id">${escapeHtml(dirId)}</div>
+            </td>
+            <td><span class="status-pill ${isOpen ? 'open' : 'closed'}"><span class="state-dot ${isOpen ? 'ok' : ''}"></span>${isOpen ? '运行中' : '已关闭'}</span></td>
+            <td>${escapeHtml(coreVer)} · ${escapeHtml(mode)}</td>
+            <td>${proxyText}</td>
+            <td>${langText}</td>
+            <td>${escapeHtml(screen)}</td>
+            <td>
+              <div class="row-actions">
+                ${isOpen
+                  ? `<button class="btn btn-danger" data-action="close" data-id="${escapeHtml(dirId)}"><span class="btn-icon">x</span>关闭</button>`
+                  : `<button class="btn btn-primary" data-action="open" data-id="${escapeHtml(dirId)}"><span class="btn-icon">▶</span>打开</button>`}
+                <button class="btn" data-action="details" data-id="${escapeHtml(dirId)}"><span class="btn-icon">?</span>详情</button>
+                <button class="btn" data-action="args" data-id="${escapeHtml(dirId)}"><span class="btn-icon">i</span>启动参数</button>
+                <button class="btn btn-danger" data-action="delete" data-id="${escapeHtml(dirId)}" ${isOpen ? 'disabled' : ''}><span class="btn-icon">x</span>删除</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('');
+
+        wrap.innerHTML = `<table>
+          <thead>
+            <tr>
+              <th>窗口名称 / ID</th>
+              <th>状态</th>
+              <th>内核 / 模式</th>
+              <th>代理网络</th>
+              <th>语言</th>
+              <th>分辨率</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`;
+      }
+
+      // ---------- 渲染代理池与自选列表 ----------
+      function renderProxies() {
+        const list = state.proxies || [];
+        const savedList = list.filter((p) => p.isSaved !== false);
+        $('proxyCountBadge').textContent = savedList.length;
+        $('proxyTabBadge').textContent = savedList.length;
+        $('poolSummary').textContent = `${savedList.length} 个节点就绪`;
+
+        // 1. 刷新新建档案表单的代理自选下拉框
+        const optGroup = $('proxySelectGroup');
+        const currentSelected = $('proxyMode').value;
+        optGroup.innerHTML = '';
+        if (savedList.length === 0) {
+          const emptyOpt = document.createElement('option');
+          emptyOpt.disabled = true;
+          emptyOpt.textContent = '（代理池暂无已存代理，请点击下方批量添加）';
+          optGroup.appendChild(emptyOpt);
+        } else {
+          savedList.forEach((item) => {
+            const opt = document.createElement('option');
+            opt.value = `pool:${item.id}`;
+            const proto = (item.protocol || item.type || 'SOCKS5').toUpperCase();
+            const remark = item.remark ? ` (${item.remark})` : '';
+            opt.textContent = `[${proto}] ${item.host}:${item.port}${remark}`;
+            optGroup.appendChild(opt);
+          });
+        }
+        if (currentSelected && (currentSelected === 'direct' || currentSelected === 'custom' || savedList.some((p) => `pool:${p.id}` === currentSelected))) {
+          $('proxyMode').value = currentSelected;
+        }
+
+        // 2. 渲染主控制面板的代理表格
+        const wrap = $('mainProxyTableWrap');
+        if (list.length === 0) {
+          wrap.innerHTML = `<div class="empty">
+            <strong>代理池暂无数据</strong>
+            点击上方“<strong>+ 批量添加多个代理</strong>”或“<strong>+ 单条添加</strong>”开始添加您的第一个代理选项。
+          </div>`;
+          return;
+        }
+
+        const currentProxyMode = $('proxyMode').value;
+        const rowsHtml = list.map((item) => {
+          const proto = (item.protocol || item.type || 'socks5').toLowerCase();
+          const protoUpper = proto.toUpperCase();
+          const auth = item.proxyUserName ? `${escapeHtml(item.proxyUserName)} / ***` : '<span style="color:var(--muted)">无密码</span>';
+          const remark = item.remark ? escapeHtml(item.remark) : '<span style="color:var(--muted)">未命名</span>';
+          const isSelected = currentProxyMode === `pool:${item.id}`;
+          const isSaved = item.isSaved !== false;
+
+          const selectBadge = isSelected
+            ? '<span class="selected-proxy-badge">🎯 当前已选</span>'
+            : '<span style="color:var(--muted);font-size:11px">未选中</span>';
+
+          const statusHtml = item.checkStatus === 1
+            ? `<span class="test-result-ok">✔ 连通 (${item.latency ?? 0}ms)</span>`
+            : (item.checkStatus === 2 ? `<span class="test-result-err">✘ ${escapeHtml(item.checkMsg || '超时/失败')}</span>` : '<span style="color:var(--muted)">未测速</span>');
+
+          return `<tr class="${isSelected ? 'is-selected-proxy' : ''}">
+            <td>${selectBadge}</td>
+            <td><strong>${remark}</strong>${isSaved ? '' : ' <span style="font-size:10px;color:var(--muted)">[档案提取]</span>'}</td>
+            <td><span class="badge-tag tag-${proto}">${protoUpper}</span></td>
+            <td><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code></td>
+            <td>${auth}</td>
+            <td id="proxy-status-${escapeHtml(item.id)}">${statusHtml}</td>
+            <td>
+              <div class="row-actions">
+                <button class="btn ${isSelected ? 'btn-quiet' : 'btn-primary'}" data-proxy-action="apply" data-id="${escapeHtml(item.id)}" title="自选此代理用于创建档案">
+                  <span class="btn-icon">🎯</span>${isSelected ? '已自选' : '自选此代理'}
+                </button>
+                <button class="btn" data-proxy-action="test" data-id="${escapeHtml(item.id)}" title="测试连通性与延迟">
+                  <span class="btn-icon">⚡</span>测速
+                </button>
+                <button class="btn btn-danger" data-proxy-action="delete" data-id="${escapeHtml(item.id)}" title="从代理池删除此节点"><span class="btn-icon">x</span>删除</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('');
+
+        wrap.innerHTML = `<table>
+          <thead>
+            <tr>
+              <th style="width:100px">自选状态</th>
+              <th>备注名称</th>
+              <th>协议</th>
+              <th>代理地址 (主机:端口)</th>
+              <th>认证信息</th>
+              <th>连通状态与延迟</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`;
+      }
+
+      async function refreshProxies() {
+        try {
+          const result = await api('/proxy/list');
+          state.proxies = Array.isArray(result) ? result : (result?.rows || []);
+          renderProxies();
+          return true;
+        } catch (err) {
+          log(`获取代理池失败: ${err.message}`, 'error');
+          return false;
+        }
+      }
+
+      // 当代理模式或自选项改变时联动
+      function handleProxyModeChange() {
+        const mode = $('proxyMode').value;
+        const fields = $('proxyFields');
+        const hintText = $('proxyHintText');
+        const quickTestBtn = $('quickTestProxyBtn');
+        const quickClearBtn = $('quickClearProxyBtn');
+
+        if (mode === 'direct') {
+          fields.classList.add('hidden');
+          hintText.textContent = '当前为直连模式，无外部代理。';
+          quickTestBtn.classList.add('hidden');
+          quickClearBtn.classList.add('hidden');
+          renderProxies();
+          return;
+        }
+
+        if (mode === 'custom') {
+          fields.classList.remove('hidden');
+          hintText.textContent = '已启用自定义代理，请在下方填写主机和端口。';
+          quickTestBtn.classList.remove('hidden');
+          quickClearBtn.classList.remove('hidden');
+          renderProxies();
+          return;
+        }
+
+        if (mode.startsWith('pool:')) {
+          const id = mode.slice(5);
+          const p = (state.proxies || []).find((item) => String(item.id) === id);
+          if (p) {
+            fields.classList.remove('hidden');
+            $('proxyType').value = (p.protocol || p.type || 'socks5').toLowerCase();
+            $('proxyHost').value = p.host || '';
+            $('proxyPort').value = p.port || '';
+            $('proxyUser').value = p.proxyUserName || '';
+            $('proxyPass').value = p.proxyPassword || '';
+
+            const proto = (p.protocol || p.type || 'SOCKS5').toUpperCase();
+            hintText.innerHTML = `🎯 已自选代理节点：<strong>[${proto}] ${escapeHtml(p.host)}:${escapeHtml(p.port)}</strong> (${escapeHtml(p.remark || '未命名')})`;
+            quickTestBtn.classList.remove('hidden');
+            quickClearBtn.classList.remove('hidden');
+            renderProxies();
+          }
+        }
+      }
+
+      async function refresh() {
+        try {
+          const [meta, list, info, connections] = await Promise.all([
+            api('/meta/locales'),
+            api('/browser/list'),
+            api('/meta/info'),
+            api('/browser/connection_info'),
+            refreshProxies()
+          ]);
+          state.meta = meta || {};
+          state.rows = Array.isArray(list) ? list : (list?.rows || []);
+          state.connections = Array.isArray(connections) ? connections : [];
+          populateMeta(state.meta);
+          populateService(info || {});
+          renderRows();
+          setState('ok', `API 在线 · ${new URL(API).host}`);
+          return true;
+        } catch (error) {
+          setState('error', 'API 未连接');
+          $('profilesContent').innerHTML = `<div class="empty"><strong>无法连接本机 API</strong>${escapeHtml(error.message)}<br><br>请先运行 start-webui.ps1。</div>`;
+          log(error.message, 'error');
+          return false;
+        }
+      }
+
+      function selectedLocale() {
+        const value = $('locale').value;
+        return value === '__custom__' ? $('customLocale').value.trim() : value;
+      }
+
+      function selectedScreen() {
+        const value = $('screen').value;
+        if (!value || value === 'custom') {
+          if (value === 'custom') {
+            const width = Number($('screenWidth').value);
+            const height = Number($('screenHeight').value);
+            if (!width || !height) throw new Error('请填写完整的自定义分辨率');
+            return [width, height];
+          }
+          return undefined;
+        }
+        return value;
+      }
+
+      function formPayload() {
+        const pMode = $('proxyMode').value;
+        let proxy;
+        let proxyId;
+
+        if (pMode === 'direct') {
+          proxy = 'direct';
+        } else if (pMode.startsWith('pool:')) {
+          proxyId = pMode.slice(5);
+          const type = $('proxyType').value;
+          const host = $('proxyHost').value.trim();
+          const port = Number($('proxyPort').value);
+          const user = $('proxyUser').value.trim();
+          const pass = $('proxyPass').value;
+          if (host && port) {
+            const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+            proxy = `${type}://${auth}${host}:${port}`;
+          }
+        } else if (pMode === 'custom') {
+          const type = $('proxyType').value;
+          const host = $('proxyHost').value.trim();
+          const port = Number($('proxyPort').value);
+          const user = $('proxyUser').value.trim();
+          const pass = $('proxyPass').value;
+          if (host && port) {
+            const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+            proxy = `${type}://${auth}${host}:${port}`;
+          }
+        }
+
+        const args = $('extraArgs').value
+          .split('\n')
+          .map((x) => x.trim())
+          .filter(Boolean);
+
+        return {
+          windowName: $('windowName').value.trim() || undefined,
+          from: $('fromProfile').value || undefined,
+          proxy,
+          proxyId,
+          locale: selectedLocale() || undefined,
+          timeZone: $('timeZone').value.trim() || undefined,
+          acceptLang: $('acceptLang').value.trim() || undefined,
+          os: $('os').value || undefined,
+          screen: selectedScreen(),
+          startUrl: $('startUrl').value.trim() || undefined,
+          open: $('openAfterCreate').checked,
+          headless: $('headless').checked,
+          workbench: $('workbench').checked,
+          useGpu: $('useGpu').checked,
+          args,
+          portScanWhiteList: $('portScanWhiteList').value.trim() || undefined,
+        };
+      }
+
+      async function create(event) {
+        event.preventDefault();
+        const button = $('createButton');
+        button.disabled = true;
+        try {
+          const payload = formPayload();
+          const count = Math.max(1, Math.min(50, Number($('batchCount').value) || 1));
+          const delay = Math.max(0, Number($('batchDelay').value) || 0);
+
+          if (count === 1) {
+            const result = await api('/browser/create', { method: 'POST', body: JSON.stringify(payload) });
+            const pName = result.windowName || result.id;
+            const targetId = result.dirId || result.id;
+            log(`创建档案成功：${pName}（${shortId(targetId)}）`, 'success');
+            toast(`档案 ${pName} 创建成功`);
+          } else {
+            const originalName = payload.windowName || 'profile';
+            log(`开始批量创建 ${count} 个档案（间隔 ${delay}ms）...`);
+            let okCount = 0;
+            for (let i = 1; i <= count; i++) {
+              const currentName = `${originalName}-${String(i).padStart(2, '0')}`;
+              await api('/browser/create', { method: 'POST', body: JSON.stringify({ ...payload, windowName: currentName }) });
+              okCount++;
+              if (delay > 0 && i < count) await new Promise((r) => setTimeout(r, delay));
+            }
+            log(`批量创建完成：成功 ${okCount} 个档案`, 'success');
+            toast(`成功批量创建 ${okCount} 个档案`);
+          }
+          await refresh();
+        } catch (error) {
+          log(`创建档案失败：${error.message}`, 'error');
+          toast(error.message, true);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function rowAction(action, id) {
+        if (!id) return;
+        try {
+          if (action === 'open') {
+            await api('/browser/open', { method: 'POST', body: JSON.stringify({ dirId: id, id }) });
+            log(`窗口启动中：${shortId(id)}`, 'success');
+            toast('窗口已发起启动');
+          } else if (action === 'close') {
+            await api('/browser/close', { method: 'POST', body: JSON.stringify({ dirId: id, id }) });
+            log(`窗口已关闭：${shortId(id)}`, 'success');
+            toast('窗口已关闭');
+          } else if (action === 'details') {
+            const data = await api(`/browser/fingerprint?dirId=${encodeURIComponent(id)}&id=${encodeURIComponent(id)}`);
+            $('dialogTitle').textContent = `指纹详情 · ${shortId(id)}`;
+            $('fingerprintOutput').textContent = JSON.stringify(data, null, 2);
+            $('detailsDialog').showModal();
+            return;
+          } else if (action === 'args') {
+            const data = await api(`/browser/args?dirId=${encodeURIComponent(id)}&id=${encodeURIComponent(id)}`);
+            $('dialogTitle').textContent = `启动参数 · ${shortId(id)}`;
+            $('fingerprintOutput').textContent = Array.isArray(data) ? data.join('\n') : JSON.stringify(data, null, 2);
+            $('detailsDialog').showModal();
+            return;
+          } else if (action === 'delete') {
+            if (!window.confirm(`确定删除档案 ${id} 吗？`)) return;
+            await api('/browser/delete', { method: 'POST', body: JSON.stringify({ dirIds: [id], dirId: id, id }) });
+            log(`档案已删除：${shortId(id)}`, 'success');
+            toast('档案已删除');
+          }
+          await refresh();
+        } catch (error) {
+          log(`操作失败：${error.message}`, 'error');
+          toast(error.message, true);
+        }
+      }
+
+      // ---------- 代理池操作逻辑 ----------
+      async function handleProxyAction(action, id) {
+        const item = (state.proxies || []).find((p) => String(p.id) === String(id));
+        if (!item) return;
+
+        if (action === 'apply') {
+          // 自选使用该代理
+          const targetVal = `pool:${id}`;
+          let exists = false;
+          for (const opt of $('proxyMode').options) {
+            if (opt.value === targetVal) { exists = true; break; }
+          }
+          if (exists) {
+            $('proxyMode').value = targetVal;
+          } else {
+            $('proxyMode').value = 'custom';
+          }
+          $('proxyType').value = (item.protocol || item.type || 'socks5').toLowerCase();
+          $('proxyHost').value = item.host || '';
+          $('proxyPort').value = item.port || '';
+          $('proxyUser').value = item.proxyUserName || '';
+          $('proxyPass').value = item.proxyPassword || '';
+          $('proxyFields').classList.remove('hidden');
+
+          const proto = (item.protocol || item.type || 'SOCKS5').toUpperCase();
+          $('proxyHintText').innerHTML = `🎯 已自选代理节点：<strong>[${proto}] ${escapeHtml(item.host)}:${escapeHtml(item.port)}</strong> (${escapeHtml(item.remark || '未命名')})`;
+          $('quickTestProxyBtn').classList.remove('hidden');
+          $('quickClearProxyBtn').classList.remove('hidden');
+
+          renderProxies(); // 更新表格自选高亮
+          toast(`已自选代理：[${proto}] ${item.remark || item.host}:${item.port}，创建档案将使用此节点`);
+          log(`新建档案已自选代理 ${item.remark || item.host}:${item.port}`, 'success');
+          $('createForm').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
+        }
+
+        if (action === 'test') {
+          const statusCell = $(`proxy-status-${id}`);
+          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+          try {
+            const res = await api('/proxy/detect', {
+              method: 'POST',
+              body: JSON.stringify({ id, host: item.host, port: item.port })
+            });
+            if (res.checkStatus === 1) {
+              item.checkStatus = 1;
+              item.latency = res.latency ?? 0;
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok">✔ 连通 (${res.latency ?? 0}ms)</span>`;
+              toast(`节点 ${item.remark || item.host}:${item.port} 连通正常 (${res.latency ?? 0}ms)`);
+            } else {
+              item.checkStatus = 2;
+              item.checkMsg = res.msg;
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '失败')}</span>`;
+              toast(`代理检测不可达: ${res.msg || '无法连接'}`, true);
+            }
+          } catch (e) {
+            if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
+            toast(`测试失败: ${e.message}`, true);
+          }
+          return;
+        }
+
+        if (action === 'delete') {
+          if (!window.confirm(`确定从代理池删除此节点吗？\n${item.remark || ''} (${item.host}:${item.port})`)) return;
+          try {
+            await api('/proxy/delete', { method: 'POST', body: JSON.stringify({ id }) });
+            log(`已从代理池删除 ${item.host}:${item.port}`, 'success');
+            toast('代理已从池中删除');
+            if ($('proxyMode').value === `pool:${id}`) {
+              $('proxyMode').value = 'direct';
+              $('proxyFields').classList.add('hidden');
+              $('proxyHintText').innerText = '当前为直连模式，无外部代理。';
+              $('quickTestProxyBtn').classList.add('hidden');
+              $('quickClearProxyBtn').classList.add('hidden');
+            }
+            await refreshProxies();
+            handleProxyModeChange();
+          } catch (e) {
+            toast(`删除失败: ${e.message}`, true);
+          }
+          return;
+        }
+      }
+
+      // 测试全部节点连通性
+      async function testAllProxies() {
+        const btn = $('btnTestAllProxies');
+        const list = state.proxies || [];
+        if (list.length === 0) {
+          toast('代理池为空，请先添加代理');
+          return;
+        }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="btn-icon">⚡</span>测速中...';
+        let okCount = 0;
+        let failCount = 0;
+
+        for (const item of list) {
+          const statusCell = $(`proxy-status-${item.id}`);
+          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+          try {
+            const res = await api('/proxy/detect', {
+              method: 'POST',
+              body: JSON.stringify({ id: item.id, host: item.host, port: item.port })
+            });
+            if (res.checkStatus === 1) {
+              item.checkStatus = 1;
+              item.latency = res.latency ?? 0;
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok">✔ 连通 (${res.latency ?? 0}ms)</span>`;
+              okCount++;
+            } else {
+              item.checkStatus = 2;
+              item.checkMsg = res.msg;
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '失败')}</span>`;
+              failCount++;
+            }
+          } catch (e) {
+            item.checkStatus = 2;
+            item.checkMsg = e.message;
+            if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ 异常</span>`;
+            failCount++;
+          }
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<span class="btn-icon">⚡</span>全部测速';
+        toast(`测速完成：${okCount} 个连通，${failCount} 个异常`);
+        log(`代理池测速完成：${okCount} 在线，${failCount} 离线`, okCount > 0 ? 'success' : 'error');
+      }
+
+      // 批量添加提交
+      async function submitBatchProxies() {
+        const text = $('batchProxyText').value.trim();
+        if (!text) {
+          toast('请先粘贴或输入代理列表', true);
+          return;
+        }
+        const defaultProto = $('batchDefaultProto').value;
+        const defaultRemark = $('batchRemarkPrefix').value.trim() || '节点';
+        const parsedList = parseBatchProxyText(text, defaultProto, defaultRemark);
+
+        if (parsedList.length === 0) {
+          toast('未能从输入文本中解析出有效的代理（请检查格式：如 127.0.0.1:1080）', true);
+          return;
+        }
+
+        const btn = $('btnSubmitBatch');
+        btn.disabled = true;
+        btn.textContent = `正在导入 ${parsedList.length} 个代理...`;
+        try {
+          const res = await api('/proxy/batch_create', {
+            method: 'POST',
+            body: JSON.stringify({ proxyList: parsedList })
+          });
+          const count = res.createdCount ?? parsedList.length;
+          toast(`成功导入并添加了 ${count} 个代理选项到代理池！`);
+          log(`批量导入 ${count} 个代理选项`, 'success');
+          $('batchProxyText').value = '';
+          $('batchAddPanel').classList.add('hidden');
+          await refreshProxies();
+        } catch (e) {
+          toast(`批量导入失败: ${e.message}`, true);
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = '<span class="btn-icon">🚀</span>立即批量导入并保存';
+        }
+      }
+
+      // 单条添加快捷粘贴解析
+      $('mainSinglePaste').addEventListener('input', (e) => {
+        const parsed = parseSmartProxy(e.target.value);
+        if (parsed) {
+          $('mainSingleProto').value = parsed.type;
+          $('mainSingleHost').value = parsed.host;
+          $('mainSinglePort').value = parsed.port;
+          $('mainSingleUser').value = parsed.user || '';
+          $('mainSinglePass').value = parsed.pass || '';
+          if (!$('mainSingleRemark').value.trim()) {
+            $('mainSingleRemark').value = parsed.remark || `${parsed.type.toUpperCase()}-${parsed.host}`;
+          }
+          $('mainSingleDetectStatus').innerHTML = `<span class="test-result-ok">已解析: ${parsed.type}://${parsed.host}:${parsed.port}</span>`;
+        }
+      });
+
+      // 保存单条代理
+      $('mainSingleSaveBtn').addEventListener('click', async () => {
+        const proto = $('mainSingleProto').value;
+        const host = $('mainSingleHost').value.trim();
+        const port = Number($('mainSinglePort').value);
+        const user = $('mainSingleUser').value.trim();
+        const pass = $('mainSinglePass').value;
+        const remark = $('mainSingleRemark').value.trim();
+
+        if (!host || !port) {
+          toast('请填写完整的主机地址和端口', true);
+          return;
+        }
+
+        const btn = $('mainSingleSaveBtn');
+        btn.disabled = true;
+        try {
+          await api('/proxy/create', {
+            method: 'POST',
+            body: JSON.stringify({
+              protocol: proto,
+              host,
+              port,
+              proxyUserName: user,
+              proxyPassword: pass,
+              remark: remark || `${proto.toUpperCase()}-${host}`
+            })
+          });
+          toast(`代理 ${remark || host}:${port} 已保存到代理池！`);
+          log(`已添加代理 ${remark || host}:${port} 到代理池`, 'success');
+          $('mainSinglePaste').value = '';
+          $('mainSingleHost').value = '';
+          $('mainSinglePort').value = '';
+          $('mainSingleUser').value = '';
+          $('mainSinglePass').value = '';
+          $('mainSingleRemark').value = '';
+          $('mainSingleDetectStatus').textContent = '填入主机和端口后可测试连通性';
+          $('singleAddPanel').classList.add('hidden');
+          await refreshProxies();
+        } catch (e) {
+          toast(`保存失败: ${e.message}`, true);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      // 单条连通性测试
+      $('mainSingleTestBtn').addEventListener('click', async () => {
+        const host = $('mainSingleHost').value.trim();
+        const port = Number($('mainSinglePort').value);
+        if (!host || !port) {
+          toast('请先填写主机地址和端口', true);
+          return;
+        }
+        $('mainSingleDetectStatus').innerHTML = '<span style="color:var(--amber)">正在检测 TCP 连通性...</span>';
+        try {
+          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port }) });
+          if (res.checkStatus === 1) {
+            $('mainSingleDetectStatus').innerHTML = `<span class="test-result-ok">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
+            toast(`测试成功: 连通正常 (${res.latency ?? 0}ms)`);
+          } else {
+            $('mainSingleDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '连接失败')}</span>`;
+            toast(`测试失败: ${res.msg || '无法连接'}`, true);
+          }
+        } catch (e) {
+          $('mainSingleDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
+          toast(`测试失败: ${e.message}`, true);
+        }
+      });
+
+      // 切换底部选项卡
+      function switchBottomTab(tab) {
+        if (tab === 'proxies') {
+          $('tabBtnProxies').classList.add('active');
+          $('tabBtnProfiles').classList.remove('active');
+          $('viewProxies').classList.remove('hidden');
+          $('viewProfiles').classList.add('hidden');
+          $('proxyTabToolbar').classList.remove('hidden');
+          $('profileTabToolbar').classList.add('hidden');
+        } else {
+          $('tabBtnProfiles').classList.add('active');
+          $('tabBtnProxies').classList.remove('active');
+          $('viewProfiles').classList.remove('hidden');
+          $('viewProxies').classList.add('hidden');
+          $('profileTabToolbar').classList.remove('hidden');
+          $('proxyTabToolbar').classList.add('hidden');
+        }
+      }
+
+      // 事件绑定
+      $('tabBtnProxies').addEventListener('click', () => switchBottomTab('proxies'));
+      $('tabBtnProfiles').addEventListener('click', () => switchBottomTab('profiles'));
+
+      $('openProxyTabBtn').addEventListener('click', () => {
+        switchBottomTab('proxies');
+        $('bottomControlPanel').scrollIntoView({ behavior: 'smooth' });
+      });
+      $('jumpToProxyListBtn').addEventListener('click', () => {
+        switchBottomTab('proxies');
+        $('bottomControlPanel').scrollIntoView({ behavior: 'smooth' });
+      });
+
+      $('btnToggleBatchAdd').addEventListener('click', () => {
+        $('batchAddPanel').classList.toggle('hidden');
+        $('singleAddPanel').classList.add('hidden');
+        if (!$('batchAddPanel').classList.contains('hidden')) {
+          $('batchProxyText').focus();
+        }
+      });
+      $('closeBatchAddBtn').addEventListener('click', () => $('batchAddPanel').classList.add('hidden'));
+      $('btnCancelBatch').addEventListener('click', () => $('batchAddPanel').classList.add('hidden'));
+      $('btnSubmitBatch').addEventListener('click', submitBatchProxies);
+
+      $('btnToggleSingleAdd').addEventListener('click', () => {
+        $('singleAddPanel').classList.toggle('hidden');
+        $('batchAddPanel').classList.add('hidden');
+        if (!$('singleAddPanel').classList.contains('hidden')) {
+          $('mainSingleHost').focus();
+        }
+      });
+      $('closeSingleAddBtn').addEventListener('click', () => $('singleAddPanel').classList.add('hidden'));
+
+      $('btnTestAllProxies').addEventListener('click', testAllProxies);
+      $('btnRefreshProxiesMain').addEventListener('click', refreshProxies);
+
+      // 快捷测试当前自选的代理
+      $('quickTestProxyBtn').addEventListener('click', async () => {
+        const host = $('proxyHost').value.trim();
+        const port = Number($('proxyPort').value);
+        if (!host || !port) {
+          toast('当前代理参数不完整', true);
+          return;
+        }
+        $('proxyHintText').innerHTML = '<span style="color:var(--amber)">正在测速中...</span>';
+        try {
+          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port }) });
+          if (res.checkStatus === 1) {
+            $('proxyHintText').innerHTML = `🟢 连通正常 <strong>(${res.latency ?? 0}ms)</strong> · ${host}:${port}`;
+            toast(`代理连通正常 (${res.latency ?? 0}ms)`);
+          } else {
+            $('proxyHintText').innerHTML = `🔴 连接失败 (${escapeHtml(res.msg || '超时')}) · ${host}:${port}`;
+            toast(`测试失败: ${res.msg || '无法连接'}`, true);
+          }
+        } catch (e) {
+          $('proxyHintText').innerHTML = `🔴 测速异常: ${escapeHtml(e.message)}`;
+          toast(e.message, true);
+        }
+      });
+
+      // 快捷切换为直连
+      $('quickClearProxyBtn').addEventListener('click', () => {
+        $('proxyMode').value = 'direct';
+        handleProxyModeChange();
+        toast('已切换为直连模式');
+      });
+
+      $('locale').addEventListener('change', () => $('customLocaleField').classList.toggle('hidden', $('locale').value !== '__custom__'));
+      $('screen').addEventListener('change', () => $('customScreenField').classList.toggle('hidden', $('screen').value !== 'custom'));
+      $('proxyMode').addEventListener('change', handleProxyModeChange);
+      $('createForm').addEventListener('submit', create);
+      $('refreshTop').addEventListener('click', refresh);
+      $('refreshProfiles').addEventListener('click', refresh);
+
+      $('clearLog').addEventListener('click', () => { $('activity').innerHTML = ''; log('操作记录已清空'); });
+      $('resetForm').addEventListener('click', () => {
+        $('createForm').reset();
+        $('customLocaleField').classList.add('hidden');
+        $('customScreenField').classList.add('hidden');
+        $('proxyFields').classList.add('hidden');
+        $('proxyMode').value = 'direct';
+        handleProxyModeChange();
+      });
+
+      $('closeAll').addEventListener('click', async () => {
+        if (!state.rows.some((row) => row?.openStatus === 1 || Boolean(row?.openStatus)) || !window.confirm('确定关闭全部运行中的窗口吗？')) return;
+        try {
+          const result = await api('/browser/close_all', { method: 'POST', body: '{}' });
+          log(`已关闭 ${result?.closed || 0} 个窗口`, 'success');
+          toast('全部窗口已关闭');
+          await refresh();
+        } catch (error) {
+          log(error.message, 'error');
+          toast(error.message, true);
+        }
+      });
+
+      $('profilesContent').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-action]');
+        if (button) rowAction(button.dataset.action, button.dataset.id);
+      });
+
+      $('mainProxyTableWrap').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-proxy-action]');
+        if (button) handleProxyAction(button.dataset.proxyAction, button.dataset.id);
+      });
+
+      $('closeDialog').addEventListener('click', () => $('detailsDialog').close());
+      $('detailsDialog').addEventListener('click', (event) => { if (event.target === $('detailsDialog')) $('detailsDialog').close(); });
+
+      refresh().then((ok) => { if (ok) log('本机 API 与代理池自选列表已连接', 'success'); });
+    })();
+  </script>
+</body>
+</html>

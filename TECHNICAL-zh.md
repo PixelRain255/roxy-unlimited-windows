@@ -7,7 +7,7 @@
 
 > **读者**：另一个 AI / 自动化工程师
 > **目的**：让你能直接驱动本机上任意数量的 RoxyBrowser 指纹窗口，不受账号额度限制
-> **状态**：已在本机实测通过（node v24.16.0，Windows）
+> **状态**：已在本机实测通过（node v22.23.2，Windows）
 
 > **📁 路径说明**：文中 `_reverse\xxx.mjs` 是作者本机的工作目录写法，
 > 在本仓库里请一律换成 `scripts\xxx.mjs`。`%APPDATA%` / `%LOCALAPPDATA%` 路径可直接用。
@@ -17,17 +17,14 @@
 ## 0. 给 AI 的快速摘要
 
 ```
-本机有两个 HTTP API，都在 127.0.0.1：
+本项目提供一个本地兼容 API，默认监听 127.0.0.1:50000：
 
-  50000  = RoxyBrowser 官方 OpenAPI
-           窗口由服务端解析 → 最多 3 个（账号额度 maxWindowCount=3，已满）
-           每个 dirId 必须存在于服务端，否则返回 code 101
+  50000  = 本项目的官方兼容 OpenAPI（roxy-api.mjs）
+           档案由本地磁盘解析 → 不依赖云端团队记录
+           兼容 workspaceId、fingerInfo、proxyInfo、list_v3、detail、mdf 等官方接口
 
-  50001  = 本项目提供的本地 OpenAPI（roxy-api.mjs）
-           窗口由本地磁盘解析 → 数量无上限
-           返回结构与官方 50000 完全一致
-
-要驱动无限窗口 → 用 50001。端口即凭证，无需 token，无需 workspaceId。
+50001 仍可通过 --port 显式使用，作为旧文档和既有脚本的兼容端口。官方公开文档要求
+API key；本地默认不强制鉴权，使用 --api-key 或 ROXY_API_KEY 后即可按官方 Header 传 token。
 ```
 
 启动 50001（若未运行）：
@@ -107,7 +104,7 @@ file = base64( ciphertext || authTag(16) )  // authTag 拼在尾部
 | 依赖 | **无**。全部脚本零第三方依赖 |
 | RoxyBrowser 安装 | `%USERPROFILE%\AppData\Local\Programs\RoxyBrowser\` |
 | 数据目录 | `%APPDATA%\RoxyBrowser\` |
-| 官方 App 是否需要运行 | **不需要**，50001 独立于官方 App |
+| 官方 App 是否需要运行 | **不需要**，本地兼容 API 独立于官方 App |
 
 ---
 
@@ -137,7 +134,7 @@ node _reverse\roxy-api.mjs --port 50001 --workbench-default
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--port` | 50001 | 监听端口 |
+| `--port` | 50000 | 监听端口（`50001` 可作为兼容端口） |
 | `--headless-default` | off | 新建/打开的窗口默认无头 |
 | `--workbench-default` | off | 默认打开工作台标签页 |
 | `--app-port` | 45535 | 工作台端口（仅 `--workbench-default` 时用） |
@@ -152,9 +149,11 @@ curl -s http://127.0.0.1:50001/health
 ---
 
 ## 5. API 参考
+> 官方公开参考：https://roxybrowser.com/docs/api-documentation/api-reference.html。本地服务实现的是本机兼容层，团队、云同步和服务端配额字段会以本地语义返回。
+
 
 所有响应统一为 `{"code":0,"msg":"成功","data":...}`，失败时 `code` 非 0。
-**无需任何请求头鉴权**（端口即凭证）。已开 CORS。
+默认不强制鉴权；设置 `--api-key` 或 `ROXY_API_KEY` 后，兼容 `token` / `x-api-key` / `api-key` / `Authorization: Bearer` Header。已开 CORS。
 
 ### 5.1 `GET /health`
 

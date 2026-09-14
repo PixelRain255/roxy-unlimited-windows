@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  RoxyBrowser - Open / Show Window
 #
 #  解决一个坑：直接 spawn RoxyChrome 时，主窗口 (Chrome_WidgetWin_1)
@@ -53,6 +53,9 @@ public class RoxyWin {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+  [DllImport("user32.dll", SetLastError=true)] public static extern int GetWindowLongW(IntPtr h, int n);
+  [DllImport("user32.dll", SetLastError=true)] public static extern int SetWindowLongW(IntPtr h, int n, int v);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
@@ -82,14 +85,19 @@ public class RoxyWin {
   public static bool Foreground(int pid) {
     IntPtr h = FindBrowserWindow(pid);
     if (h == IntPtr.Zero) return false;
-    if (IsIconic(h)) ShowWindow(h, 9);   // SW_RESTORE
-    int fg = GetForegroundWindow() == IntPtr.Zero ? 0 : GetWindowThreadProcessId(GetForegroundWindow(), out int _dummy);
+    int style = GetWindowLongW(h, -16);       // GWL_STYLE
+    SetWindowLongW(h, -16, style | 0x10000000); // WS_VISIBLE
+    if (IsIconic(h)) ShowWindow(h, 9);        // SW_RESTORE
+    ShowWindow(h, 5);                         // SW_SHOW
+    SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, 0x0043); // NOMOVE | NOSIZE | SHOWWINDOW
+    int dummy;
+    int fg = GetForegroundWindow() == IntPtr.Zero ? 0 : GetWindowThreadProcessId(GetForegroundWindow(), out dummy);
     int me = GetCurrentThreadId();
     bool attached = false;
     if (fg != 0 && fg != me) attached = AttachThreadInput(fg, me, true);
     try {
       BringWindowToTop(h);
-      ShowWindow(h, 5);                  // SW_SHOW
+      SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, 0x0043);
       return SetForegroundWindow(h);
     } finally { if (attached) AttachThreadInput(fg, me, false); }
   }
