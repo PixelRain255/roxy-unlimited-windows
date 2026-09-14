@@ -154,15 +154,15 @@ node scripts\roxy-api.mjs --port 50001 --data-dir "D:\RoxyData"
 ```
 找不到 RoxyBrowser 的运行环境。
 
-  ✓ 数据目录：C:\...\AppData\Roaming\RoxyBrowser
-  ✗ 内核：内核目录不存在：C:\...\chrome-bin
+  ✓ 数据目录：%APPDATA%\RoxyBrowser
+  ✗ 内核：内核目录不存在：%APPDATA%\RoxyBrowser\chrome-bin
     RoxyChrome.exe 是官方 App 自己下载的，脚本不会生成它。
     解决：在这台机器上安装并运行一次 RoxyBrowser，
           登录后在界面里打开任意一个窗口，让它把内核下载下来。
           或者从别的机器把 chrome-bin\ 整个目录复制到：
-            C:\...\chrome-bin
+            %APPDATA%\RoxyBrowser\chrome-bin
 
-  ✓ 安装目录：C:\...\Programs\RoxyBrowser
+  ✓ 安装目录：%LOCALAPPDATA%\Programs\RoxyBrowser
 ```
 
 自查命令：

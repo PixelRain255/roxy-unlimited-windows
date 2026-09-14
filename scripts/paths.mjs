@@ -29,6 +29,35 @@ const listDir = (p) => { try { return fs.readdirSync(p, { withFileTypes: true })
 
 const uniq = (a) => [...new Set(a.filter(Boolean))];
 
+// ---------- 输出脱敏 ----------
+// 实际读写始终用真实路径；只有「打印给人看」的时候把用户名换成占位符，
+// 免得截图 / 贴日志 / 提 issue 时把本机用户名带出去。
+//
+// 用子串替换而不是前缀匹配：诊断信息常是「中文前缀 + 路径」的形式
+// （例如 "内核目录不存在：C:\Users\x\..."），前缀匹配会漏掉。
+// 顺序：LOCALAPPDATA / APPDATA 都在 USERPROFILE 之下，先替换更长的。
+const REDACT_ENVS = [
+  ['LOCALAPPDATA', '%LOCALAPPDATA%'],
+  ['APPDATA', '%APPDATA%'],
+  ['ProgramData', '%ProgramData%'],
+  ['USERPROFILE', '%USERPROFILE%'],
+  ['TEMP', '%TEMP%'],
+];
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function redactPath(s) {
+  if (!s || typeof s !== 'string') return s;
+  let out = s;
+  for (const [env, token] of REDACT_ENVS) {
+    const base = process.env[env];
+    if (!base || base.length < 4) continue;
+    out = out.replace(new RegExp(escRe(base), 'gi'), token);
+  }
+  return out;
+}
+/** 显示用：--full-paths 时原样返回 */
+export function show(p, fullPaths = false) { return fullPaths ? p : redactPath(p); }
+
 // ---------- 数据目录 ----------
 function looksLikeDataDir(p) {
   if (!isDir(p)) return false;
@@ -198,8 +227,8 @@ export function resolveRoxyPaths(opts = {}) {
   return P;
 }
 
-/** 人话版的失败原因，直接打给用户看 */
-export function explainFailure(P) {
+/** 人话版的失败原因，直接打给用户看（默认脱敏） */
+export function explainFailure(P, fullPaths = false) {
   const L = [];
   L.push('');
   L.push('找不到 RoxyBrowser 的运行环境。');
@@ -207,31 +236,33 @@ export function explainFailure(P) {
   if (!P.dataDir) {
     if (P.diag.dataDirExplicitFailed) {
       L.push('  ✗ 数据目录：你显式指定的路径无效');
-      for (const c of P.diag.dataDirCandidates ?? []) L.push(`      [无效] ${c.path}`);
+      for (const c of P.diag.dataDirCandidates ?? []) L.push(`      [无效] ${show(c.path, fullPaths)}`);
       L.push('    判定标准：目录里要有 chrome-bin\\ 或 browser-cache\\');
       L.push('    （已显式指定，故不会自动回退到其它目录）');
     } else {
       L.push('  ✗ 数据目录：没找到');
       L.push('    已尝试这些位置：');
-      for (const c of P.diag.dataDirCandidates ?? []) L.push(`      ${c.ok ? '[有]' : '[无]'} ${c.path}`);
+      for (const c of P.diag.dataDirCandidates ?? []) L.push(`      ${c.ok ? '[有]' : '[无]'} ${show(c.path, fullPaths)}`);
       L.push('    判定标准：目录里要有 chrome-bin\\ 或 browser-cache\\');
       L.push('    解决：用 --data-dir 指定，或设环境变量 ROXY_HOME');
     }
   } else {
-    L.push(`  ✓ 数据目录：${P.dataDir}`);
-    L.push(`  ✗ 内核：${P.diag.coreProblem ?? '未找到'}`);
+    L.push(`  ✓ 数据目录：${show(P.dataDir, fullPaths)}`);
+    L.push(`  ✗ 内核：${show(P.diag.coreProblem, fullPaths) ?? '未找到'}`);
     L.push('    RoxyChrome.exe 是官方 App 自己下载的，脚本不会生成它。');
     L.push('    解决：在这台机器上安装并运行一次 RoxyBrowser，');
     L.push('          登录后在界面里打开任意一个窗口，让它把内核下载下来。');
     L.push('          或者从别的机器把 chrome-bin\\ 整个目录复制到：');
-    L.push(`            ${path.join(P.dataDir, 'chrome-bin')}`);
+    L.push(`            ${show(path.join(P.dataDir, 'chrome-bin'), fullPaths)}`);
   }
   L.push('');
   if (!P.installDir) {
     L.push('  ⚠ 安装目录：没找到（不致命，只影响官方扩展与 blockDomain 拦截页）');
   } else {
-    L.push(`  ✓ 安装目录：${P.installDir}`);
+    L.push(`  ✓ 安装目录：${show(P.installDir, fullPaths)}`);
   }
+  L.push('');
+  if (!fullPaths) L.push('  （路径已脱敏；要看真实路径加 --full-paths）');
   L.push('');
   return L.join('\n');
 }

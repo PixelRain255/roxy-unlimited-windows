@@ -34,7 +34,7 @@ export const decLumi = (b64) => {
 };
 
 // ---------- paths：自动发现，不写死 ----------
-import { resolveRoxyPaths, explainFailure } from './paths.mjs';
+import { resolveRoxyPaths, explainFailure, redactPath, show } from './paths.mjs';
 
 let _P = null;
 let _PErr = null;
@@ -46,8 +46,8 @@ export function getPaths(opts) {
   return _P;
 }
 export function pathsReady(opts) { return getPaths(opts).ok; }
-export function pathHelp(opts) { return explainFailure(getPaths(opts)); }
-export { explainFailure };
+export function pathHelp(opts, fullPaths = false) { return explainFailure(getPaths(opts), fullPaths); }
+export { explainFailure, redactPath, show };
 
 const cacheDir = () => getPaths().browserCacheDir;
 

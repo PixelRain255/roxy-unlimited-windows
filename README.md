@@ -79,13 +79,13 @@ Invoke-RestMethod -Uri "$API/browser/close_all" -Method POST -ContentType "appli
 `RoxyChrome.exe` 是**官方 App 自己下载的**，脚本不会生成它。所以一台干净的机器上直接跑会失败：
 
 ```
-✗ 内核：内核目录不存在：C:\Users\...\AppData\Roaming\RoxyBrowser\chrome-bin
+✗ 内核：内核目录不存在：%APPDATA%\RoxyBrowser\chrome-bin
 
   RoxyChrome.exe 是官方 App 自己下载的，脚本不会生成它。
   解决：在这台机器上安装并运行一次 RoxyBrowser，
         登录后在界面里打开任意一个窗口，让它把内核下载下来。
         或者从别的机器把 chrome-bin\ 整个目录复制到：
-          C:\Users\...\AppData\Roaming\RoxyBrowser\chrome-bin
+          %APPDATA%\RoxyBrowser\chrome-bin
 ```
 
 **新机器上跑之前，先做这一步**：装 RoxyBrowser → 登录 → 在官方界面里打开任意一个窗口。
@@ -117,16 +117,35 @@ Invoke-RestMethod -Uri "$API/browser/close_all" -Method POST -ContentType "appli
 ### 查看解析结果
 
 ```powershell
-node scripts\paths-cli.mjs --list     # 或者 node scripts\mkprofile.mjs --list
+node scripts\paths-cli.mjs             # 人话报告（路径已脱敏）
+node scripts\mkprofile.mjs --list      # 同上，附带可用语言/分辨率/OS
+node scripts\paths-cli.mjs --full-paths   # 显示真实路径
 ```
 
 ```
 环境检查通过
-  数据目录  : C:\Users\...\AppData\Roaming\RoxyBrowser
-  安装目录  : C:\Users\...\AppData\Local\Programs\RoxyBrowser
-  内核      : ...\chrome-bin\152\RoxyChrome.exe  (v152)
-  chromedriver: ...\chrome-bin\152\chromedriver.exe
-  档案目录  : ...\browser-cache
+  数据目录  : %APPDATA%\RoxyBrowser
+  安装目录  : %LOCALAPPDATA%\Programs\RoxyBrowser
+  内核      : %APPDATA%\RoxyBrowser\chrome-bin\152\RoxyChrome.exe  (v152)
+  chromedriver: %APPDATA%\RoxyBrowser\chrome-bin\152\chromedriver.exe
+  档案目录  : %APPDATA%\RoxyBrowser\browser-cache
+
+（路径已脱敏，加 --full-paths 显示真实路径）
+```
+
+### 输出默认脱敏
+
+**打印出来的路径不会带你的 Windows 用户名。** 所有人类可读的输出都会把
+`C:\Users\<你的用户名>\...` 换成 `%USERPROFILE%` / `%APPDATA%` / `%LOCALAPPDATA%`，
+方便截图、贴日志、提 issue。
+
+- **只有显示被脱敏**，实际读写始终用真实路径，功能不受影响
+- `--json` 输出（供 PowerShell 脚本消费）始终是真实路径
+- 要看真实路径：加 `--full-paths`
+
+```powershell
+node scripts\roxy-api.mjs --port 50001                # 输出脱敏
+node scripts\roxy-api.mjs --port 50001 --full-paths   # 输出真实路径
 ```
 
 ### 手动指定

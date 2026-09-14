@@ -18,7 +18,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import {
-  getPaths, pathHelp, LOCALE_PRESETS, SCREENS, WINDOWS_PROFILES,
+  getPaths, pathHelp, show, LOCALE_PRESETS, SCREENS, WINDOWS_PROFILES,
   coreExe, coreVersion, lumiPath, profileDir, hasProfile, isDirId,
   readFingerprint, createProfileOnDisk,
 } from './fingerprint.mjs';
@@ -31,6 +31,7 @@ const HEADLESS  = argv.includes('--headless-default');
 const WORKBENCH = argv.includes('--workbench-default');
 const APP_PORT  = parseInt(argOf('app-port', '45535'), 10);
 const DEF_LOCALE = argOf('locale', null);
+const FULL_PATHS = argv.includes('--full-paths');   // 默认脱敏显示路径
 
 // 路径自动发现：--data-dir / --install-dir / ROXY_HOME / ROXY_INSTALL / 常见位置 / 注册表 / 运行中进程
 const PATHS = getPaths({ dataDir: argOf('data-dir'), installDir: argOf('install-dir') });
@@ -393,19 +394,21 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 
 // ---------- 启动前置检查：环境不对就别假装能跑 ----------
 if (!PATHS.ok) {
-  console.error(pathHelp());
+  console.error(pathHelp(undefined, FULL_PATHS));
   console.error('提示：可用 --data-dir <路径> 或环境变量 ROXY_HOME 手动指定数据目录。\n');
   process.exit(2);
 }
 
 server.listen(PORT, '127.0.0.1', () => {
+  const s = (p) => show(p, FULL_PATHS);   // 默认把用户名换成 %USERPROFILE% 之类的占位符
   console.log(`[roxy-api] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[roxy-api] core        : ${PATHS.coreExe}  (v${PATHS.coreVersion})`);
-  console.log(`[roxy-api] data dir    : ${PATHS.dataDir}`);
-  console.log(`[roxy-api] profile base: ${PATHS.browserCacheDir}`);
-  console.log(`[roxy-api] install dir : ${PATHS.installDir ?? '(未找到 — 官方扩展与拦截页将不可用，不影响启动)'}`);
-  console.log(`[roxy-api] chromedriver: ${PATHS.chromedriver ?? '(未找到)'}`);
+  console.log(`[roxy-api] core        : ${s(PATHS.coreExe)}  (v${PATHS.coreVersion})`);
+  console.log(`[roxy-api] data dir    : ${s(PATHS.dataDir)}`);
+  console.log(`[roxy-api] profile base: ${s(PATHS.browserCacheDir)}`);
+  console.log(`[roxy-api] install dir : ${s(PATHS.installDir) ?? '(未找到 — 官方扩展与拦截页将不可用，不影响启动)'}`);
+  console.log(`[roxy-api] chromedriver: ${s(PATHS.chromedriver) ?? '(未找到)'}`);
   console.log(`[roxy-api] quota       : NONE — windows are resolved locally, no server call`);
   console.log(`[roxy-api] headless default: ${HEADLESS}   workbench default: ${WORKBENCH}`);
   console.log(`[roxy-api] default locale  : ${DEF_LOCALE ?? '(none — inherit template)'}`);
+  if (!FULL_PATHS) console.log(`[roxy-api] 路径已脱敏显示，加 --full-paths 看真实路径`);
 });

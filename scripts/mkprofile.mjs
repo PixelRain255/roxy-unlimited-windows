@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  getPaths, pathHelp, createProfileOnDisk, newestTemplateDir,
+  getPaths, pathHelp, show, createProfileOnDisk, newestTemplateDir,
   LOCALE_PRESETS, SCREENS, WINDOWS_PROFILES,
 } from './fingerprint.mjs';
 
@@ -22,21 +22,23 @@ const argv = process.argv.slice(2);
 const argOf = (n, d = null) => { const i = argv.indexOf('--' + n); return i === -1 ? d : argv[i + 1]; };
 const has = (n) => argv.includes('--' + n);
 
+const FULL_PATHS = has('full-paths');   // 默认脱敏显示路径
 const P = getPaths({ dataDir: argOf('data-dir'), installDir: argOf('install-dir') });
+const s = (p) => show(p, FULL_PATHS);
 
 // ---------- 环境自检 ----------
 if (!P.ok) {
-  console.error(pathHelp());
+  console.error(pathHelp(undefined, FULL_PATHS));
   console.error('提示：可用 --data-dir <路径> 或环境变量 ROXY_HOME 手动指定数据目录。\n');
   process.exit(2);
 }
 
 if (has('list')) {
-  console.log(`数据目录  : ${P.dataDir}`);
-  console.log(`安装目录  : ${P.installDir ?? '(未找到)'}`);
-  console.log(`内核      : ${P.coreExe}  (v${P.coreVersion})`);
-  console.log(`chromedriver: ${P.chromedriver ?? '(未找到)'}`);
-  console.log(`档案目录  : ${P.browserCacheDir}`);
+  console.log(`数据目录  : ${s(P.dataDir)}`);
+  console.log(`安装目录  : ${s(P.installDir) ?? '(未找到)'}`);
+  console.log(`内核      : ${s(P.coreExe)}  (v${P.coreVersion})`);
+  console.log(`chromedriver: ${s(P.chromedriver) ?? '(未找到)'}`);
+  console.log(`档案目录  : ${s(P.browserCacheDir)}`);
   const n = fs.existsSync(P.browserCacheDir) ? fs.readdirSync(P.browserCacheDir, { withFileTypes: true }).filter((e) => e.isDirectory()).length : 0;
   console.log(`现有档案  : ${n} 个`);
   console.log(`模板档案  : ${newestTemplateDir() ?? '(无，将使用内置骨架)'}`);
@@ -61,8 +63,8 @@ if (screenArg) {
   else { console.error(`--screen 格式应为 WxH，例如 1920x1080（收到 "${screenArg}"）`); process.exit(2); }
 }
 
-console.log(`[env] 数据目录 ${P.dataDir}`);
-console.log(`[env] 内核 v${P.coreVersion}  ${P.coreExe}`);
+console.log(`[env] 数据目录 ${s(P.dataDir)}`);
+console.log(`[env] 内核 v${P.coreVersion}  ${s(P.coreExe)}`);
 console.log(`[env] 模板 ${FROM ?? newestTemplateDir() ?? '(内置骨架)'}`);
 
 // ---------- 生成 ----------
@@ -95,7 +97,7 @@ for (let i = 0; i < COUNT; i++) {
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 fs.writeFileSync(path.join(HERE, 'last-created.json'), JSON.stringify(created, null, 2));
 
-console.log(`\n[created] ${created.length} 个档案 -> ${P.browserCacheDir}\n`);
+console.log(`\n[created] ${created.length} 个档案 -> ${s(P.browserCacheDir)}\n`);
 for (const c of created) {
   console.log(`  dirId      ${c.dirId}`);
   console.log(`  windowName ${c.windowName}   locale=${c.locale ?? '-'}  tz=${c.timeZone ?? '-'}  screen=${c.screen}  os=${c.os}`);

@@ -33,6 +33,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# 显示用脱敏：把 C:\Users\<用户名>\... 换成 %USERPROFILE%\...
+function Redact($p) {
+  if (-not $p) { return $p }
+  foreach ($e in 'LOCALAPPDATA', 'APPDATA', 'ProgramData', 'USERPROFILE') {
+    $base = [Environment]::GetEnvironmentVariable($e)
+    if ($base -and $p.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { return "%$e%" + $p.Substring($base.Length) }
+  }
+  return $p
+}
+
 # ---- 路径自动发现：复用 Node 解析器，不重复实现 ----
 $P = (node "$Here\paths-cli.mjs" --json) | ConvertFrom-Json
 if (-not $P.ok) {
@@ -58,7 +68,7 @@ $BaseArgs = @(
 )
 
 $exe = Get-CoreExe
-Write-Host "[core] $exe" -ForegroundColor Cyan
+Write-Host "[core] $(Redact $exe)" -ForegroundColor Cyan
 
 # ---- resolve profiles ----
 $profiles =
@@ -102,7 +112,7 @@ foreach ($p in $profiles) {
 
   Write-Host ("[{0}] {1}  ->  debug port {2}" -f $i, $p.Id, ($DebugPortBase + $i)) -ForegroundColor Green
   if ($DryRun) {
-    Write-Host ("      {0} {1}" -f $exe, ($a -join ' ')) -ForegroundColor DarkGray
+    Write-Host ("      {0} {1}" -f (Redact $exe), (($a -join ' ') -replace [regex]::Escape($CacheDir), (Redact $CacheDir))) -ForegroundColor DarkGray
   } else {
     Start-Process -FilePath $exe -ArgumentList $a -WorkingDirectory (Split-Path $exe -Parent) | Out-Null
     Start-Sleep -Milliseconds 400
