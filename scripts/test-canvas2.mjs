@@ -3,11 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { decLumi, encLumi, getPaths, coreExe, profileDir } from './fingerprint.mjs';
+import { decLumi, encLumi, getPaths, coreExe, profileDir, newestTemplateDir } from './fingerprint.mjs';
 const PATHS = getPaths();
 
 const EXE = coreExe();
-const TEMPLATE = 'cff9192a6ab99d618081a838a8eeaa9c';
+const TEMPLATE = process.env.TEMPLATE_DIR ?? newestTemplateDir();   // 动态选取，不再写死
 const template = JSON.parse(decLumi(fs.readFileSync(path.join(PATHS.browserCacheDir, TEMPLATE, 'lumi.conf'), 'utf8')));
 
 const PROBE = `(() => {
