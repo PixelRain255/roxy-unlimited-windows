@@ -179,13 +179,32 @@ export function buildFingerprint(o) {
   if (!template) throw new Error('template config is required');
   const cfg = JSON.parse(JSON.stringify(template));
 
-  const preset = o.locale
-    ? (LOCALE_PRESETS[o.locale] ?? LOCALE_PRESETS[String(o.locale).replace('_', '-')] ?? null)
-    : null;
-  const locale = o.locale ?? null;
-  const timeZone = o.timeZone ?? preset?.timeZone ?? null;
-  const acceptLang = o.acceptLang ?? preset?.acceptLang ?? null;
+  const presetKeys = Object.keys(LOCALE_PRESETS).filter((k) => k !== 'pl');
+  const randomPresetKey = pick(presetKeys);
+  const randomPreset = LOCALE_PRESETS[randomPresetKey];
 
+  let locale = o.locale ?? null;
+  let timeZone = o.timeZone ?? null;
+  let acceptLang = o.acceptLang ?? null;
+
+  if (locale) {
+    const p = LOCALE_PRESETS[locale] ?? LOCALE_PRESETS[String(locale).replace('_', '-')];
+    if (!timeZone && p?.timeZone) timeZone = p.timeZone;
+    if (!acceptLang) acceptLang = p?.acceptLang ?? `${locale},${String(locale).split('-')[0]};q=0.9,en;q=0.8`;
+  } else if (timeZone) {
+    const matchKey = presetKeys.find((k) => LOCALE_PRESETS[k].timeZone.toLowerCase() === String(timeZone).toLowerCase());
+    if (matchKey) {
+      locale = matchKey;
+      if (!acceptLang) acceptLang = LOCALE_PRESETS[matchKey].acceptLang;
+    } else {
+      locale = 'en-US';
+      if (!acceptLang) acceptLang = 'en-US,en;q=0.9';
+    }
+  } else {
+    locale = randomPresetKey;
+    timeZone = randomPreset.timeZone;
+    acceptLang = randomPreset.acceptLang;
+  }
   const win = o.os ? (WINDOWS_PROFILES.find((w) => w.name === o.os) ?? pick(WINDOWS_PROFILES)) : pick(WINDOWS_PROFILES);
   const gpu = pick(GPU_POOL);
   const scr = Array.isArray(o.screen) && o.screen.length === 2

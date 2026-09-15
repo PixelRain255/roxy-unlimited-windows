@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import {
   getPaths, pathHelp, show, LOCALE_PRESETS, SCREENS, WINDOWS_PROFILES,
   coreExe, coreVersion, lumiPath, profileDir, hasProfile, isDirId,
@@ -338,13 +338,49 @@ async function cdpClose(wsUrl) {
 
 async function closeWindow(dirId) {
   const rec = running.get(dirId);
-  if (!rec) return false;
-  try { rec.chainBridge?.close(); } catch {}
-  try { rec.noiseController?.close(); } catch {}
-  try { await cdpClose(rec.ws); } catch {}
-  await sleep(600);
-  if (rec.pid) { try { process.kill(rec.pid, 0); execFile('taskkill', ['/PID', String(rec.pid), '/T', '/F'], () => {}); } catch {} }
+  try { rec?.chainBridge?.close(); } catch {}
+  try { rec?.noiseController?.close(); } catch {}
+  if (rec?.ws) {
+    try { await cdpClose(rec.ws); } catch {}
+  }
+  await sleep(400);
+  if (rec?.pid) {
+    try {
+      execFileSync('taskkill', ['/PID', String(rec.pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {}
+  }
   running.delete(dirId);
+  return Boolean(rec);
+}
+async function removeProfileDir(dirId) {
+  if (!isDirId(dirId)) return false;
+  const ud = profileDir(dirId);
+  if (!fs.existsSync(ud)) return true;
+  await closeWindow(dirId);
+  try {
+    const pScript = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${dirId}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+    execFileSync('powershell', ['-NoProfile', '-Command', pScript], { stdio: 'ignore', timeout: 5000 });
+  } catch {}
+  await sleep(250);
+  let removed = false;
+  for (let i = 0; i < 8; i++) {
+    try {
+      fs.rmSync(ud, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      removed = true;
+      break;
+    } catch (e) {
+      await sleep(150);
+    }
+  }
+  if (!removed && fs.existsSync(ud)) {
+    try {
+      execFileSync('cmd.exe', ['/c', 'rd', '/s', '/q', ud], { stdio: 'ignore', timeout: 5000 });
+      removed = !fs.existsSync(ud);
+    } catch {}
+  }
+  if (fs.existsSync(ud)) {
+    throw new Error(`EPERM, Permission denied: \\\\?\\${ud}`);
+  }
   return true;
 }
 
@@ -445,8 +481,12 @@ function normalizeProfileRequest(body) {
       ? proxyUrlOf(body.proxyInfo)
       : body.workspaceId !== undefined ? 'direct' : undefined;
   }
-  const locale = body.locale ?? (finger.isLanguageBaseIp === false ? (finger.language || finger.displayLanguage) : undefined);
-  const timeZone = body.timeZone ?? (finger.isTimeZone === false ? finger.timeZone : undefined);
+  const locale = body.locale ?? body.language ?? body.languages ?? body.lang
+    ?? finger.language ?? finger.languages ?? finger.displayLanguage ?? finger.locale ?? undefined;
+  const timeZone = body.timeZone ?? body.timezone ?? body.time_zone
+    ?? finger.timeZone ?? finger.timezone ?? finger.time_zone ?? finger.timeZoneName ?? undefined;
+  const acceptLang = body.acceptLang ?? body.accept_lang ?? body.acceptLanguage
+    ?? finger.acceptLanguage ?? finger.acceptLang ?? undefined;
   let screen = body.screen;
   if (typeof screen === 'string' && /^\d+x\d+$/.test(screen)) screen = screen.split('x').map(Number);
   if (!screen && finger.resolutionType && finger.resolutionX && finger.resolutionY) screen = [Number(finger.resolutionX), Number(finger.resolutionY)];
@@ -1093,21 +1133,22 @@ const server = http.createServer(async (req, res) => {
         if (endpoint) active = await recoverWindow(dirId, endpoint, false);
       }
       if (active) await closeWindow(dirId);
-      const old = readFingerprint(body.dirId) ?? {};
+      const old = readFingerprint(dirId) ?? {};
+      const opts = normalizeProfileRequest(body);
       const built = buildFingerprint({
         template: old,
-        dirId: body.dirId,
-        userDataDir: profileDir(body.dirId),
-        windowName: old.windowName,
-        proxy: proxyUrlOf(proxyInfoOf(old)),
-        locale: old.appLocale,
-        timeZone: old.timeZone,
-        acceptLang: old.acceptLang,
-        screen: old.screen ? [old.screen.width, old.screen.height] : undefined,
-        os: old.userAgentMetadata?.platformVersion === '10.0.0' ? 'Windows 10' : 'Windows 11',
-        portScanWhiteList: old.portScan?.portScanWhiteList ?? `${PORT};45535;${APP_PORT};`,
+        dirId,
+        userDataDir: profileDir(dirId),
+        windowName: opts.windowName || old.windowName,
+        proxy: opts.proxy !== undefined ? (opts.proxy === 'direct' ? undefined : opts.proxy) : proxyUrlOf(proxyInfoOf(old)),
+        locale: opts.locale ?? undefined,
+        timeZone: opts.timeZone ?? undefined,
+        acceptLang: opts.acceptLang ?? undefined,
+        screen: opts.screen ?? undefined,
+        os: opts.os ?? undefined,
+        portScanWhiteList: opts.portScanWhiteList ?? old.portScan?.portScanWhiteList ?? `${PORT};45535;${APP_PORT};`,
       });
-      fs.writeFileSync(lumiPath(body.dirId), encLumi(JSON.stringify(built.cfg)));
+      fs.writeFileSync(lumiPath(dirId), encLumi(JSON.stringify(built.cfg)));
       return ok(res);
     }
 
@@ -1466,9 +1507,8 @@ const server = http.createServer(async (req, res) => {
       const ids = idListOf(body.dirIds ?? body.dirId ?? body.ids ?? body.id ?? query.dirIds ?? query.dirId ?? query.id);
       if (!ids.length) return err(res, 'dirIds is required');
       for (const dirId of ids) {
-        await closeWindow(dirId);
         if (!isDirId(dirId)) return err(res, 'invalid dirId');
-        fs.rmSync(profileDir(dirId), { recursive: true, force: true });
+        await removeProfileDir(dirId);
       }
       return ok(res);
     }
