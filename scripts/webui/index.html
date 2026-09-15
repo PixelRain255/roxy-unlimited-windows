@@ -1280,10 +1280,14 @@
             ? '<span class="selected-proxy-badge">🎯 当前已选</span>'
             : '<span style="color:var(--muted);font-size:11px">未选中</span>';
 
-          const statusHtml = item.checkStatus === 1
-            ? `<span class="test-result-ok">✔ 连通 (${item.latency ?? 0}ms)</span>`
-            : (item.checkStatus === 2 ? `<span class="test-result-err">✘ ${escapeHtml(item.checkMsg || '超时/失败')}</span>` : '<span style="color:var(--muted)">未测速</span>');
-
+          let statusHtml = '<span style="color:var(--muted)">未测速</span>';
+          if (item.checkStatus === 1) {
+            const countryBadge = item.lastCountry ? `<span class="badge" style="background:var(--surface-3);font-size:11px;margin-left:4px;font-weight:600">${escapeHtml(item.lastCountry)}</span>` : '';
+            const ipTip = item.lastIp ? ` title="公网出口 IP: ${escapeHtml(item.lastIp)}${item.lastCountry ? ' (' + escapeHtml(item.lastCountry) + ')' : ''}"` : '';
+            statusHtml = `<span class="test-result-ok"${ipTip}>✔ 外网 ${item.latency ?? 0}ms${countryBadge}</span>`;
+          } else if (item.checkStatus === 2) {
+            statusHtml = `<span class="test-result-err" title="${escapeHtml(item.checkMsg || '')}">✘ ${escapeHtml(item.checkMsg || '外网超时/失败')}</span>`;
+          }
           return `<tr class="${isSelected ? 'is-selected-proxy' : ''}">
             <td>${selectBadge}</td>
             <td><strong>${remark}</strong>${isSaved ? '' : ' <span style="font-size:10px;color:var(--muted)">[档案提取]</span>'}${entryBadge}</td>
@@ -1319,7 +1323,7 @@
               <th>协议</th>
               <th>代理地址 (主机:端口)</th>
               <th>认证信息</th>
-              <th>连通状态与延迟</th>
+              <th>外网连通与延迟</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -1624,22 +1628,33 @@
 
         if (action === 'test') {
           const statusCell = $(`proxy-status-${id}`);
-          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">外网测速中...</span>';
           try {
             const res = await api('/proxy/detect', {
               method: 'POST',
-              body: JSON.stringify({ id, host: item.host, port: item.port })
+              body: JSON.stringify({
+                id,
+                host: item.host,
+                port: item.port,
+                protocol: item.protocol || item.type,
+                username: item.proxyUserName,
+                password: item.proxyPassword
+              })
             });
             if (res.checkStatus === 1) {
               item.checkStatus = 1;
               item.latency = res.latency ?? 0;
-              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok">✔ 连通 (${res.latency ?? 0}ms)</span>`;
-              toast(`节点 ${item.remark || item.host}:${item.port} 连通正常 (${res.latency ?? 0}ms)`);
+              item.lastIp = res.lastIp || item.lastIp || '';
+              item.lastCountry = res.lastCountry || item.lastCountry || '';
+              const countryBadge = item.lastCountry ? `<span class="badge" style="background:var(--surface-3);font-size:11px;margin-left:4px;font-weight:600">${escapeHtml(item.lastCountry)}</span>` : '';
+              const ipTip = item.lastIp ? ` title="公网出口 IP: ${escapeHtml(item.lastIp)}${item.lastCountry ? ' (' + escapeHtml(item.lastCountry) + ')' : ''}"` : '';
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok"${ipTip}>✔ 外网 ${res.latency ?? 0}ms${countryBadge}</span>`;
+              toast(`节点 ${item.remark || item.host}:${item.port} 外网正常 (${res.latency ?? 0}ms)${item.lastCountry ? ' [' + item.lastCountry + ']' : ''}`);
             } else {
               item.checkStatus = 2;
               item.checkMsg = res.msg;
-              if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '失败')}</span>`;
-              toast(`代理检测不可达: ${res.msg || '无法连接'}`, true);
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-err" title="${escapeHtml(res.msg || '')}">✘ ${escapeHtml(res.msg || '失败')}</span>`;
+              toast(`外网检测失败: ${res.msg || '无法连接'}`, true);
             }
           } catch (e) {
             if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
@@ -1749,21 +1764,32 @@
 
         for (const item of list) {
           const statusCell = $(`proxy-status-${item.id}`);
-          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+          if (statusCell) statusCell.innerHTML = '<span style="color:var(--amber)">外网测速中...</span>';
           try {
             const res = await api('/proxy/detect', {
               method: 'POST',
-              body: JSON.stringify({ id: item.id, host: item.host, port: item.port })
+              body: JSON.stringify({
+                id: item.id,
+                host: item.host,
+                port: item.port,
+                protocol: item.protocol || item.type,
+                username: item.proxyUserName,
+                password: item.proxyPassword
+              })
             });
             if (res.checkStatus === 1) {
               item.checkStatus = 1;
               item.latency = res.latency ?? 0;
-              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok">✔ 连通 (${res.latency ?? 0}ms)</span>`;
+              item.lastIp = res.lastIp || item.lastIp || '';
+              item.lastCountry = res.lastCountry || item.lastCountry || '';
+              const countryBadge = item.lastCountry ? `<span class="badge" style="background:var(--surface-3);font-size:11px;margin-left:4px;font-weight:600">${escapeHtml(item.lastCountry)}</span>` : '';
+              const ipTip = item.lastIp ? ` title="公网出口 IP: ${escapeHtml(item.lastIp)}${item.lastCountry ? ' (' + escapeHtml(item.lastCountry) + ')' : ''}"` : '';
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-ok"${ipTip}>✔ 外网 ${res.latency ?? 0}ms${countryBadge}</span>`;
               okCount++;
             } else {
               item.checkStatus = 2;
               item.checkMsg = res.msg;
-              if (statusCell) statusCell.innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '失败')}</span>`;
+              if (statusCell) statusCell.innerHTML = `<span class="test-result-err" title="${escapeHtml(res.msg || '')}">✘ ${escapeHtml(res.msg || '失败')}</span>`;
               failCount++;
             }
           } catch (e) {
@@ -1881,28 +1907,31 @@
 
       // 单条连通性测试
       $('mainSingleTestBtn').addEventListener('click', async () => {
-        const host = $('mainSingleHost').value.trim();
-        const port = Number($('mainSinglePort').value);
+        const { host, port } = cleanInputHostPort($('mainSingleHost'), $('mainSinglePort'), $('mainSingleProto'));
+        const protocol = $('mainSingleProto') ? $('mainSingleProto').value : 'socks5';
+        const user = $('mainSingleUser') ? $('mainSingleUser').value.trim() : '';
+        const pass = $('mainSinglePass') ? $('mainSinglePass').value : '';
         if (!host || !port) {
           toast('请先填写主机地址和端口', true);
           return;
         }
-        $('mainSingleDetectStatus').innerHTML = '<span style="color:var(--amber)">正在检测 TCP 连通性...</span>';
+        $('mainSingleDetectStatus').innerHTML = '<span style="color:var(--amber)">正在测试真实外网延迟与公网出口...</span>';
         try {
-          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port }) });
+          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port, protocol, user, pass }) });
           if (res.checkStatus === 1) {
-            $('mainSingleDetectStatus').innerHTML = `<span class="test-result-ok">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
-            toast(`测试成功: 连通正常 (${res.latency ?? 0}ms)`);
+            const loc = res.lastCountry ? `[${escapeHtml(res.lastCountry)}] ` : '';
+            const ip = res.lastIp ? ` ${escapeHtml(res.lastIp)}` : '';
+            $('mainSingleDetectStatus').innerHTML = `<span class="test-result-ok">✔ 外网正常 (${res.latency ?? 0}ms) ${loc}${ip}</span>`;
+            toast(`测试成功: 外网连通正常 (${res.latency ?? 0}ms)`);
           } else {
             $('mainSingleDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '连接失败')}</span>`;
-            toast(`测试失败: ${res.msg || '无法连接'}`, true);
+            toast(`测试失败: ${res.msg || '无法连接外网'}`, true);
           }
         } catch (e) {
           $('mainSingleDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
           toast(`测试失败: ${e.message}`, true);
         }
       });
-
       // 切换底部选项卡
       function switchBottomTab(tab) {
         if (tab === 'proxies') {
@@ -1960,21 +1989,25 @@
 
       // 快捷测试当前自选的代理
       $('quickTestProxyBtn').addEventListener('click', async () => {
-        const host = $('proxyHost').value.trim();
-        const port = Number($('proxyPort').value);
+        const { host, port } = cleanInputHostPort($('proxyHost'), $('proxyPort'), $('proxyProtocol'));
+        const protocol = $('proxyProtocol') ? $('proxyProtocol').value : 'socks5';
+        const username = $('proxyUser') ? $('proxyUser').value.trim() : '';
+        const password = $('proxyPass') ? $('proxyPass').value : '';
         if (!host || !port) {
           toast('当前代理参数不完整', true);
           return;
         }
-        $('proxyHintText').innerHTML = '<span style="color:var(--amber)">正在测速中...</span>';
+        $('proxyHintText').innerHTML = '<span style="color:var(--amber)">正在检测真实外网延迟...</span>';
         try {
-          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port }) });
+          const res = await api('/proxy/detect', { method: 'POST', body: JSON.stringify({ host, port, protocol, username, password }) });
           if (res.checkStatus === 1) {
-            $('proxyHintText').innerHTML = `🟢 连通正常 <strong>(${res.latency ?? 0}ms)</strong> · ${host}:${port}`;
-            toast(`代理连通正常 (${res.latency ?? 0}ms)`);
+            const loc = res.lastCountry ? ` [${escapeHtml(res.lastCountry)}]` : '';
+            const ip = res.lastIp ? ` ${escapeHtml(res.lastIp)}` : '';
+            $('proxyHintText').innerHTML = `🟢 外网正常 <strong>(${res.latency ?? 0}ms)</strong>${loc}${ip} · ${host}:${port}`;
+            toast(`代理外网正常 (${res.latency ?? 0}ms)`);
           } else {
-            $('proxyHintText').innerHTML = `🔴 连接失败 (${escapeHtml(res.msg || '超时')}) · ${host}:${port}`;
-            toast(`测试失败: ${res.msg || '无法连接'}`, true);
+            $('proxyHintText').innerHTML = `🔴 外网失败 (${escapeHtml(res.msg || '超时')}) · ${host}:${port}`;
+            toast(`外网测试失败: ${res.msg || '无法连接'}`, true);
           }
         } catch (e) {
           $('proxyHintText').innerHTML = `🔴 测速异常: ${escapeHtml(e.message)}`;
@@ -2043,14 +2076,16 @@
           $('editProxyDetectStatus').innerHTML = '<span style="color:var(--danger)">✘ 请先填写主机和端口</span>';
           return;
         }
-        $('editProxyDetectStatus').innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+        $('editProxyDetectStatus').innerHTML = '<span style="color:var(--amber)">外网测速中...</span>';
         try {
           const res = await api('/proxy/detect', {
             method: 'POST',
             body: JSON.stringify({ host, port, protocol, user, pass })
           });
           if (res.checkStatus === 1) {
-            $('editProxyDetectStatus').innerHTML = `<span class="test-result-ok">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
+            const loc = res.lastCountry ? ` [${escapeHtml(res.lastCountry)}]` : '';
+            const ip = res.lastIp ? ` ${escapeHtml(res.lastIp)}` : '';
+            $('editProxyDetectStatus').innerHTML = `<span class="test-result-ok">✔ 外网正常 (${res.latency ?? 0}ms)${loc}${ip}</span>`;
           } else {
             $('editProxyDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '无法连通')}</span>`;
           }

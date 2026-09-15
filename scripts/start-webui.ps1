@@ -46,7 +46,7 @@ function Test-Health {
 function Test-WebUi {
   try {
     $meta = Invoke-RestMethod -Uri "$ApiUrl/meta/info" -TimeoutSec 2
-    if ($meta.code -ne 0 -or -not $meta.data.nodeMajor -or [int]$meta.data.nodeMajor -lt 22 -or -not $meta.data.webUiVersion -or [int]$meta.data.webUiVersion -lt 4) { return $false }
+    if ($meta.code -ne 0 -or -not $meta.data.nodeMajor -or [int]$meta.data.nodeMajor -lt 22 -or -not $meta.data.webUiVersion -or [int]$meta.data.webUiVersion -lt 5) { return $false }
     if ([bool]$EffectiveApiKey -ne [bool]$meta.data.apiKeyRequired) { return $false }
     $entry = Invoke-RestMethod -Uri "$ApiUrl/proxy/entry" -TimeoutSec 2
     if ($entry.code -ne 0) { return $false }

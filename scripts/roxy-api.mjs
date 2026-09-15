@@ -564,11 +564,13 @@ function proxyRow(id, value) {
   const protocol = String(p.protocol || p.type || p.proxyCategory || 'SOCKS5').toUpperCase();
   return {
     id: String(id), checkStatus: p.checkStatus ?? 0, checkChannel: p.checkChannel ?? '', checkChannelValue: '', lastIp: p.lastIp ?? '',
-    lastCountry: p.lastCountry ?? '', lastState: '', lastCity: '', ipType: p.ipType ?? 'IPV4', protocol,
+    lastCountry: p.lastCountry ?? '', lastState: '', lastCity: p.lastCity ?? '', ipType: p.ipType ?? 'IPV4', protocol,
     type: protocol.toLowerCase(), isSaved: p.isSaved !== false,
     host: String(p.host ?? ''), port: String(p.port ?? ''), proxyPassword: String(p.proxyPassword ?? p.password ?? ''),
     proxyUserName: String(p.proxyUserName ?? p.username ?? ''), refreshUrl: p.refreshUrl ?? '',
     remark: String(p.remark ?? p.title ?? p.name ?? ''),
+    latency: p.latency !== undefined ? Number(p.latency) : 0,
+    checkMsg: String(p.checkMsg ?? ''),
     checkTime: p.checkTime ?? '', createTime: p.createTime ?? nowText(), updateTime: p.updateTime ?? nowText(),
   };
 }
@@ -934,6 +936,217 @@ function createLocalChainBridge(entryProxy, exitProxy) {
     server.on('error', reject);
   });
 }
+const PROXY_INTERNET_TARGETS = [
+  {
+    host: 'ip-api.com',
+    port: 80,
+    path: '/json?fields=status,message,country,countryCode,regionName,city,query',
+    parse(body) {
+      try {
+        const obj = JSON.parse(body);
+        if (obj && (obj.status === 'success' || obj.query)) {
+          return {
+            ip: String(obj.query || ''),
+            country: String(obj.countryCode || obj.country || ''),
+            city: String(obj.city || '')
+          };
+        }
+      } catch {}
+      return null;
+    }
+  },
+  {
+    host: 'api.ipify.org',
+    port: 80,
+    path: '/?format=json',
+    parse(body) {
+      try {
+        const obj = JSON.parse(body);
+        if (obj && obj.ip) {
+          return { ip: String(obj.ip), country: '', city: '' };
+        }
+      } catch {}
+      return null;
+    }
+  },
+  {
+    host: 'checkip.amazonaws.com',
+    port: 80,
+    path: '/',
+    parse(body) {
+      const m = String(body || '').trim().match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+      if (m) {
+        return { ip: m[0], country: '', city: '' };
+      }
+      return null;
+    }
+  }
+];
+
+function doProbeSingleTarget(targetProxy, entryProxy, endpoint, timeoutMs = 6500) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    let activeSocket = null;
+
+    function cleanup() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (activeSocket) {
+        try { activeSocket.destroy(); } catch {}
+        activeSocket = null;
+      }
+    }
+
+    function finish(err, res) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (err) reject(err);
+      else resolve(res);
+    }
+
+    timer = setTimeout(() => {
+      finish(new Error(`连接公网测试节点超时 (${timeoutMs}ms)`));
+    }, timeoutMs);
+
+    const t0 = Date.now();
+
+    (async () => {
+      const isChained = Boolean(entryProxy && entryProxy.enabled && entryProxy.host && entryProxy.port);
+      const firstHopHost = isChained ? entryProxy.host : targetProxy.host;
+      const firstHopPort = Number(isChained ? entryProxy.port : targetProxy.port);
+
+      const socket = net.createConnection({ host: firstHopHost, port: firstHopPort });
+      activeSocket = socket;
+
+      await new Promise((resSock, rejSock) => {
+        socket.once('connect', resSock);
+        socket.once('error', (e) => {
+          if (e.code === 'ECONNREFUSED') {
+            rejSock(new Error(isChained
+              ? `入口代理拒绝连接 (${firstHopHost}:${firstHopPort})，请确认跳板服务已启动`
+              : `代理端口拒绝连接 (${firstHopHost}:${firstHopPort})，请确认本地代理客户端（如 Clash）正在运行并监听该端口`));
+          } else if (e.code === 'ENOTFOUND') {
+            rejSock(new Error(`无法解析主机地址: ${firstHopHost}`));
+          } else {
+            rejSock(e);
+          }
+        });
+      });
+
+      let tunnel = socket;
+      if (isChained) {
+        await tunnelViaProxy(tunnel, entryProxy, targetProxy.host, Number(targetProxy.port));
+      }
+
+      const proto = String(targetProxy.protocol || targetProxy.type || '').toLowerCase();
+      const isHttp = proto.includes('http');
+      let responseBuf = Buffer.alloc(0);
+
+      if (isHttp) {
+        let usedConnect = false;
+        try {
+          await httpConnectTunnel(tunnel, endpoint.host, endpoint.port, targetProxy);
+          usedConnect = true;
+        } catch (connectErr) {
+          // 部分轻量 HTTP 代理只支持正向明文代理，降级为普通正向代理 GET 请求
+        }
+
+        if (usedConnect) {
+          const reqStr = `GET ${endpoint.path} HTTP/1.1\r\nHost: ${endpoint.host}\r\nUser-Agent: RoxyProxy/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
+          tunnel.write(reqStr);
+        } else {
+          let authHeader = '';
+          const u = targetProxy.username || targetProxy.proxyUserName || '';
+          const p = targetProxy.password || targetProxy.proxyPassword || '';
+          if (u) {
+            const b64 = Buffer.from(`${u}:${p}`).toString('base64');
+            authHeader = `Proxy-Authorization: Basic ${b64}\r\n`;
+          }
+          const reqStr = `GET http://${endpoint.host}:${endpoint.port}${endpoint.path} HTTP/1.1\r\nHost: ${endpoint.host}\r\n${authHeader}User-Agent: RoxyProxy/1.0\r\nAccept: */*\r\nProxy-Connection: close\r\nConnection: close\r\n\r\n`;
+          tunnel.write(reqStr);
+        }
+      } else {
+        await socks5ConnectTunnel(tunnel, endpoint.host, endpoint.port, targetProxy);
+        const reqStr = `GET ${endpoint.path} HTTP/1.1\r\nHost: ${endpoint.host}\r\nUser-Agent: RoxyProxy/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
+        tunnel.write(reqStr);
+      }
+
+      tunnel.on('data', (chunk) => {
+        responseBuf = Buffer.concat([responseBuf, chunk]);
+        const headerEnd = responseBuf.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          const headersStr = responseBuf.subarray(0, headerEnd).toString('utf8');
+          const mLen = headersStr.match(/content-length:\s*(\d+)/i);
+          if (mLen) {
+            const contentLen = Number(mLen[1]);
+            const bodyLen = responseBuf.length - (headerEnd + 4);
+            if (bodyLen >= contentLen) {
+              const latency = Date.now() - t0;
+              const body = responseBuf.subarray(headerEnd + 4, headerEnd + 4 + contentLen).toString('utf8');
+              finish(null, { latency, body, headersStr });
+            }
+          }
+        }
+      });
+
+      tunnel.on('end', () => {
+        const latency = Date.now() - t0;
+        const headerEnd = responseBuf.indexOf('\r\n\r\n');
+        const body = headerEnd !== -1 ? responseBuf.subarray(headerEnd + 4).toString('utf8') : responseBuf.toString('utf8');
+        const headersStr = headerEnd !== -1 ? responseBuf.subarray(0, headerEnd).toString('utf8') : '';
+        finish(null, { latency, body, headersStr });
+      });
+
+      tunnel.on('error', (e) => {
+        finish(new Error(`外网数据传输异常: ${e.message}`));
+      });
+    })().catch((err) => {
+      finish(err);
+    });
+  });
+}
+
+async function detectProxyInternet(targetProxy, options = {}) {
+  const entryProxy = options.entryProxy || null;
+  const timeout = options.timeout || 7500;
+  let lastErr = null;
+
+  const protoInput = String(targetProxy.protocol || targetProxy.type || '').toLowerCase();
+  const candidateProtos = protoInput.includes('http') ? ['http', 'socks5'] : ['socks5', 'http'];
+
+  for (const proto of candidateProtos) {
+    const curTarget = { ...targetProxy, protocol: proto };
+    for (const endpoint of PROXY_INTERNET_TARGETS) {
+      try {
+        const res = await doProbeSingleTarget(curTarget, entryProxy, endpoint, timeout);
+        const parsed = endpoint.parse(res.body);
+        if (parsed && parsed.ip) {
+          return {
+            checkStatus: 1,
+            latency: res.latency,
+            lastIp: parsed.ip,
+            lastCountry: parsed.country,
+            lastCity: parsed.city || '',
+            msg: `外网连通正常 (${res.latency}ms) [${parsed.country ? parsed.country + ' ' : ''}${parsed.ip}]`,
+            chained: Boolean(entryProxy && entryProxy.enabled)
+          };
+        }
+      } catch (err) {
+        lastErr = err;
+        if (err.message.includes('拒绝连接') || err.message.includes('ECONNREFUSED')) {
+          return { checkStatus: 2, latency: 0, msg: err.message };
+        }
+      }
+    }
+  }
+
+  return {
+    checkStatus: 2,
+    latency: 0,
+    msg: lastErr ? `外网访问失败: ${lastErr.message}` : '公网连通性检测超时'
+  };
+}
 function accountRow(id, body, times = {}) {
   return {
     id: String(id),
@@ -984,7 +1197,7 @@ const server = http.createServer(async (req, res) => {
         coreVersion: PATHS.coreVersion,
         nodeVersion: process.versions.node,
         nodeMajor: NODE_MAJOR,
-        webUiVersion: 4,
+        webUiVersion: 5,
         apiKeyRequired: Boolean(API_KEY),
         officialPort: 50000,
         defaultLocale: DEF_LOCALE,
@@ -1265,72 +1478,58 @@ const server = http.createServer(async (req, res) => {
     if (p === '/proxy/detect') {
       let rawHost = String(body.host || '').trim();
       let rawPort = Number(body.port);
-      if ((!rawHost || !rawPort) && body.id && proxyStore.has(String(body.id))) {
-        const item = proxyStore.get(String(body.id));
-        rawHost = item.host;
-        rawPort = Number(item.port);
+      let protocol = body.protocol || body.type;
+      let username = body.username || body.proxyUserName || '';
+      let password = body.password || body.proxyPassword || '';
+      const id = body.id ? String(body.id) : '';
+
+      if (id && proxyStore.has(id)) {
+        const item = proxyStore.get(id);
+        if (!rawHost) rawHost = item.host;
+        if (!rawPort) rawPort = Number(item.port);
+        if (!protocol) protocol = item.protocol || item.type;
+        if (!username) username = item.proxyUserName || item.username;
+        if (!password) password = item.proxyPassword || item.password;
       }
+
       const { host, port } = cleanHostAndPort(rawHost, rawPort);
       if (!host || !port) return ok(res, { checkStatus: 0, msg: '未指定目标主机与端口' });
-      const t0 = Date.now();
+
       const useChain = body.useChain !== undefined
         ? Boolean(body.useChain)
         : Boolean(entryProxyConfig.enabled && entryProxyConfig.host && entryProxyConfig.port);
 
-      const checkPromise = new Promise(async (resolve) => {
-        if (useChain && entryProxyConfig.host && entryProxyConfig.port) {
-          try {
-            const entryCleaned = cleanHostAndPort(entryProxyConfig.host, entryProxyConfig.port);
-            const socket = net.createConnection({
-              host: entryCleaned.host,
-              port: Number(entryCleaned.port),
-              timeout: 4500
-            });
-            socket.once('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: `入口代理连接超时 (4500ms): ${entryCleaned.host}:${entryCleaned.port}` }); });
-            socket.once('error', (e) => {
-              const detail = e.code === 'ECONNREFUSED'
-                ? `入口代理拒绝连接 (${entryCleaned.host}:${entryCleaned.port})，请确认跳板服务已启动`
-                : (e.code === 'ENOTFOUND' ? `无法解析入口代理主机名 (${entryCleaned.host})` : (e.message || '不可达'));
-              resolve({ checkStatus: 2, msg: `入口代理连接失败: ${detail}` });
-            });
-            await new Promise((res, rej) => {
-              socket.once('connect', res);
-              socket.once('error', rej);
-            });
-            await tunnelViaProxy(socket, entryProxyConfig, host, port);
-            const latency = Date.now() - t0;
-            socket.destroy();
-            resolve({
-              checkStatus: 1,
-              msg: `经入口代理连接成功 (${latency}ms)`,
-              latency,
-              chained: true,
-              entryRemark: entryProxyConfig.remark || `${entryCleaned.host}:${entryCleaned.port}`
-            });
-          } catch (e) {
-            resolve({ checkStatus: 2, msg: `经入口代理转发失败: ${e.message || '握手失败'}` });
-          }
-        } else {
-          const socket = net.createConnection({ host, port, timeout: 3500 }, () => {
-            const latency = Date.now() - t0;
-            socket.destroy();
-            resolve({ checkStatus: 1, msg: `TCP 连接成功 (${latency}ms)`, latency });
-          });
-          socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: `连接超时 (3500ms): ${host}:${port}` }); });
-          socket.on('error', (e) => {
-            const detail = e.code === 'ECONNREFUSED'
-              ? `目标端口拒绝连接 (${host}:${port})。如为本地代理，请确认客户端正在运行并监听该端口`
-              : (e.code === 'ENOTFOUND' ? `无法解析主机地址: ${host}` : (e.message || '连接失败'));
-            resolve({ checkStatus: 2, msg: detail });
-          });
-        }
-      });
-      const checkResult = await checkPromise;
-      if (body.id && proxyStore.has(String(body.id))) {
-        const item = proxyStore.get(String(body.id));
+      const entryProxy = (useChain && entryProxyConfig.host && entryProxyConfig.port)
+        ? entryProxyConfig
+        : null;
+
+      const targetProxy = {
+        host,
+        port,
+        protocol: protocol ? String(protocol).toLowerCase() : '',
+        username: String(username || ''),
+        password: String(password || '')
+      };
+
+      const checkResult = await detectProxyInternet(targetProxy, { entryProxy, timeout: 8000 });
+
+      if (id && proxyStore.has(id)) {
+        const item = proxyStore.get(id);
         item.checkStatus = checkResult.checkStatus;
         item.checkTime = nowText();
+        if (checkResult.checkStatus === 1) {
+          item.latency = checkResult.latency;
+          if (checkResult.lastIp) item.lastIp = checkResult.lastIp;
+          if (checkResult.lastCountry) item.lastCountry = checkResult.lastCountry;
+          if (checkResult.lastCity) item.lastCity = checkResult.lastCity;
+          item.checkMsg = '';
+        } else {
+          item.latency = 0;
+          item.checkMsg = checkResult.msg;
+        }
+        saveProxyStore();
       }
+
       return ok(res, checkResult);
     }
 
