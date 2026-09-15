@@ -532,13 +532,46 @@ function proxyRow(id, value) {
     checkTime: p.checkTime ?? '', createTime: p.createTime ?? nowText(), updateTime: p.updateTime ?? nowText(),
   };
 }
+function cleanHostAndPort(rawHost, rawPort) {
+  let host = String(rawHost || '').trim();
+  let port = Number(rawPort) || 0;
+  if (host.includes('://')) {
+    try {
+      const u = new URL(host);
+      host = u.hostname;
+      if (u.port) port = Number(u.port);
+    } catch {
+      host = host.replace(/^[a-zA-Z0-9]+:\/\//, '');
+    }
+  }
+  if (host.includes('@')) host = host.split('@').pop();
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+    if (end > -1) {
+      const ipv6 = host.slice(1, end);
+      const after = host.slice(end + 1);
+      if (after.startsWith(':')) port = Number(after.slice(1)) || port;
+      host = ipv6;
+    }
+  } else if (host.includes(':')) {
+    const parts = host.split(':');
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+      host = parts[0];
+      port = Number(parts[1]) || port;
+    }
+  }
+  host = host.replace(/\/.*$/, '').trim();
+  if (host.toLowerCase() === 'localhost') host = '127.0.0.1';
+  return { host, port };
+}
 
 function officialProxyFromBody(body) {
   const p = body?.proxyInfo ?? body ?? {};
   const proto = String(p.protocol ?? p.proxyCategory ?? p.type ?? 'socks5').toLowerCase();
+  const cleaned = cleanHostAndPort(p.host, p.port);
   return {
     proxyCategory: proto.toUpperCase(), protocol: proto.toUpperCase(), type: proto, ipType: p.ipType ?? 'IPV4',
-    host: String(p.host ?? '').trim(), port: String(p.port ?? '').trim(),
+    host: cleaned.host, port: cleaned.port ? String(cleaned.port) : String(p.port ?? '').trim(),
     proxyUserName: String(p.proxyUserName ?? p.username ?? p.user ?? '').trim(),
     proxyPassword: String(p.proxyPassword ?? p.password ?? p.pass ?? '').trim(),
     refreshUrl: String(p.refreshUrl ?? '').trim(), checkChannel: String(p.checkChannel ?? '').trim(),
@@ -911,7 +944,7 @@ const server = http.createServer(async (req, res) => {
         coreVersion: PATHS.coreVersion,
         nodeVersion: process.versions.node,
         nodeMajor: NODE_MAJOR,
-        webUiVersion: 3,
+        webUiVersion: 4,
         apiKeyRequired: Boolean(API_KEY),
         officialPort: 50000,
         defaultLocale: DEF_LOCALE,
@@ -1189,13 +1222,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/proxy/detect') {
-      let host = String(body.host || '').trim();
-      let port = Number(body.port);
-      if ((!host || !port) && body.id && proxyStore.has(String(body.id))) {
+      let rawHost = String(body.host || '').trim();
+      let rawPort = Number(body.port);
+      if ((!rawHost || !rawPort) && body.id && proxyStore.has(String(body.id))) {
         const item = proxyStore.get(String(body.id));
-        host = item.host;
-        port = Number(item.port);
+        rawHost = item.host;
+        rawPort = Number(item.port);
       }
+      const { host, port } = cleanHostAndPort(rawHost, rawPort);
       if (!host || !port) return ok(res, { checkStatus: 0, msg: '未指定目标主机与端口' });
       const t0 = Date.now();
       const useChain = body.useChain !== undefined
@@ -1205,13 +1239,19 @@ const server = http.createServer(async (req, res) => {
       const checkPromise = new Promise(async (resolve) => {
         if (useChain && entryProxyConfig.host && entryProxyConfig.port) {
           try {
+            const entryCleaned = cleanHostAndPort(entryProxyConfig.host, entryProxyConfig.port);
             const socket = net.createConnection({
-              host: entryProxyConfig.host,
-              port: Number(entryProxyConfig.port),
+              host: entryCleaned.host,
+              port: Number(entryCleaned.port),
               timeout: 4500
             });
-            socket.once('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '入口代理连接超时 (4500ms)' }); });
-            socket.once('error', (e) => resolve({ checkStatus: 2, msg: `入口代理连接失败: ${e.message || '不可达'}` }));
+            socket.once('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: `入口代理连接超时 (4500ms): ${entryCleaned.host}:${entryCleaned.port}` }); });
+            socket.once('error', (e) => {
+              const detail = e.code === 'ECONNREFUSED'
+                ? `入口代理拒绝连接 (${entryCleaned.host}:${entryCleaned.port})，请确认跳板服务已启动`
+                : (e.code === 'ENOTFOUND' ? `无法解析入口代理主机名 (${entryCleaned.host})` : (e.message || '不可达'));
+              resolve({ checkStatus: 2, msg: `入口代理连接失败: ${detail}` });
+            });
             await new Promise((res, rej) => {
               socket.once('connect', res);
               socket.once('error', rej);
@@ -1224,7 +1264,7 @@ const server = http.createServer(async (req, res) => {
               msg: `经入口代理连接成功 (${latency}ms)`,
               latency,
               chained: true,
-              entryRemark: entryProxyConfig.remark || `${entryProxyConfig.host}:${entryProxyConfig.port}`
+              entryRemark: entryProxyConfig.remark || `${entryCleaned.host}:${entryCleaned.port}`
             });
           } catch (e) {
             resolve({ checkStatus: 2, msg: `经入口代理转发失败: ${e.message || '握手失败'}` });
@@ -1235,8 +1275,13 @@ const server = http.createServer(async (req, res) => {
             socket.destroy();
             resolve({ checkStatus: 1, msg: `TCP 连接成功 (${latency}ms)`, latency });
           });
-          socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '连接超时 (3500ms)' }); });
-          socket.on('error', (e) => { resolve({ checkStatus: 2, msg: e.message || '连接失败' }); });
+          socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: `连接超时 (3500ms): ${host}:${port}` }); });
+          socket.on('error', (e) => {
+            const detail = e.code === 'ECONNREFUSED'
+              ? `目标端口拒绝连接 (${host}:${port})。如为本地代理，请确认客户端正在运行并监听该端口`
+              : (e.code === 'ENOTFOUND' ? `无法解析主机地址: ${host}` : (e.message || '连接失败'));
+            resolve({ checkStatus: 2, msg: detail });
+          });
         }
       });
       const checkResult = await checkPromise;
@@ -1251,9 +1296,17 @@ const server = http.createServer(async (req, res) => {
     if (p === '/proxy/entry') {
       if (req.method === 'POST') {
         if (body.enabled !== undefined) entryProxyConfig.enabled = Boolean(body.enabled);
-        if (body.protocol !== undefined) entryProxyConfig.protocol = String(body.protocol || 'socks5').toLowerCase();
-        if (body.host !== undefined) entryProxyConfig.host = String(body.host).trim();
-        if (body.port !== undefined) entryProxyConfig.port = String(body.port).trim();
+        if (body.protocol !== undefined) {
+          let pr = String(body.protocol || 'socks5').toLowerCase();
+          entryProxyConfig.protocol = pr.includes('http') ? 'http' : 'socks5';
+        }
+        if (body.host !== undefined || body.port !== undefined) {
+          const rawH = body.host !== undefined ? body.host : entryProxyConfig.host;
+          const rawP = body.port !== undefined ? body.port : entryProxyConfig.port;
+          const cl = cleanHostAndPort(rawH, rawP);
+          entryProxyConfig.host = cl.host;
+          entryProxyConfig.port = cl.port ? String(cl.port) : (body.port ? String(body.port).trim() : '');
+        }
         if (body.username !== undefined) entryProxyConfig.username = String(body.username || body.proxyUserName || '').trim();
         if (body.password !== undefined) entryProxyConfig.password = String(body.password || body.proxyPassword || '');
         if (body.remark !== undefined) entryProxyConfig.remark = String(body.remark).trim();
@@ -1265,9 +1318,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/proxy/entry/test') {
-      const host = String(body.host || entryProxyConfig.host || '').trim();
-      const port = Number(body.port || entryProxyConfig.port);
-      const proto = String(body.protocol || entryProxyConfig.protocol || 'socks5').toLowerCase();
+      const rawHost = String(body.host || entryProxyConfig.host || '').trim();
+      const rawPort = Number(body.port || entryProxyConfig.port);
+      const { host, port } = cleanHostAndPort(rawHost, rawPort);
+      let proto = String(body.protocol || entryProxyConfig.protocol || 'socks5').toLowerCase();
+      if (proto.includes('http')) proto = 'http';
+      else proto = 'socks5';
       const username = String(body.username !== undefined ? body.username : (entryProxyConfig.username || '')).trim();
       const password = String(body.password !== undefined ? body.password : (entryProxyConfig.password || ''));
 
@@ -1277,8 +1333,16 @@ const server = http.createServer(async (req, res) => {
         const socket = net.createConnection({ host, port, timeout: 3500 });
         await new Promise((resolve, reject) => {
           socket.once('connect', resolve);
-          socket.once('error', reject);
-          socket.once('timeout', () => { socket.destroy(); reject(new Error('入口代理连接超时 (3500ms)')); });
+          socket.once('error', (err) => {
+            if (err.code === 'ECONNREFUSED') {
+              reject(new Error(`无法连接 ${host}:${port} (ECONNREFUSED)。请确认 Clash / 代理客户端已启动且端口正确（例如 Clash Verge 默认端口为 7897，CFW 默认为 7890）`));
+            } else if (err.code === 'ENOTFOUND') {
+              reject(new Error(`无法解析主机地址: ${host} (ENOTFOUND)。请勿在主机栏中包含协议或端口`));
+            } else {
+              reject(err);
+            }
+          });
+          socket.once('timeout', () => { socket.destroy(); reject(new Error(`入口代理连接超时 (3500ms): ${host}:${port}`)); });
         });
 
         if (proto.startsWith('socks')) {
@@ -1292,8 +1356,37 @@ const server = http.createServer(async (req, res) => {
               socket.removeListener('error', reject);
               if (buf.length >= 2 && buf[0] === 0x05) {
                 resolve();
+              } else if (buf.toString('utf8').includes('HTTP/')) {
+                reject(new Error(`目标端口返回了 HTTP 协议响应，非标准 SOCKS5。请将协议类型切换为 HTTP (CONNECT) 后重试！`));
               } else {
-                reject(new Error('目标端口响应异常，非标准 SOCKS5 代理'));
+                reject(new Error(`目标端口响应异常，非标准 SOCKS5 代理 (首字节 0x${(buf[0] || 0).toString(16)})`));
+              }
+            };
+            socket.on('data', onData);
+            socket.once('error', reject);
+          });
+        } else if (proto === 'http') {
+          await new Promise((resolve, reject) => {
+            let authHeader = '';
+            if (username) {
+              const b64 = Buffer.from(`${username}:${password}`).toString('base64');
+              authHeader = `Proxy-Authorization: Basic ${b64}\r\n`;
+            }
+            socket.write(`CONNECT 1.1.1.1:443 HTTP/1.1\r\nHost: 1.1.1.1:443\r\n${authHeader}Proxy-Connection: keep-alive\r\n\r\n`);
+            const onData = (buf) => {
+              socket.removeListener('data', onData);
+              socket.removeListener('error', reject);
+              const head = buf.toString('utf8');
+              if (head.startsWith('HTTP/1.') && (head.includes(' 200 ') || head.includes(' 407 ') || head.includes(' 502 ') || head.includes(' 503 '))) {
+                if (head.includes(' 407 ')) {
+                  reject(new Error('HTTP 代理需要身份认证 (407 Proxy Authentication Required)，请填写用户名与密码'));
+                } else {
+                  resolve();
+                }
+              } else if (buf.length >= 2 && buf[0] === 0x05) {
+                reject(new Error('目标端口返回了 SOCKS5 协议响应，非 HTTP 代理。请将协议类型切换为 SOCKS5！'));
+              } else {
+                resolve();
               }
             };
             socket.on('data', onData);
@@ -1302,7 +1395,7 @@ const server = http.createServer(async (req, res) => {
         }
         const latency = Date.now() - t0;
         socket.destroy();
-        return ok(res, { checkStatus: 1, msg: `入口代理连通正常 (${latency}ms)`, latency });
+        return ok(res, { checkStatus: 1, msg: `入口代理连通正常 (${latency}ms)`, latency, host, port, protocol: proto });
       } catch (err) {
         return ok(res, { checkStatus: 2, msg: err.message || '入口代理连接失败' });
       }

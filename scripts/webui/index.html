@@ -229,18 +229,26 @@
     .log-line.error .log-message { color: var(--danger); }
     .log-line.info .log-message { color: #bfd0c9; }
     dialog {
-      width: min(760px, calc(100% - 28px));
+      position: fixed;
+      inset: 0;
+      margin: auto;
+      width: min(760px, calc(100vw - 28px));
+      max-height: min(88vh, 680px);
       padding: 0;
       border: 1px solid var(--line);
-      border-radius: 5px;
+      border-radius: 6px;
       color: var(--text);
       background: var(--surface);
       box-shadow: 0 28px 90px rgba(0,0,0,.55);
+      overflow: hidden;
     }
+    dialog:not([open]) { display: none !important; }
+    dialog[open] { display: flex !important; flex-direction: column; }
     dialog::backdrop { background: rgba(4,8,8,.72); }
-    .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+    .dialog-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
     .dialog-head h2 { margin: 0; font-size: 15px; }
-    .dialog-body { padding: 16px 18px 18px; }
+    .dialog-body { flex: 1 1 auto; overflow-y: auto; padding: 16px 18px 18px; }
+    .dialog-foot { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--surface-2); position: sticky; bottom: 0; z-index: 5; }
     pre {
       max-height: 52vh;
       overflow: auto;
@@ -792,7 +800,8 @@
   </dialog>
 
   <!-- 代理编辑对话框 -->
-  <dialog id="proxyEditDialog" style="max-width:560px;width:92%">
+  <!-- 代理编辑对话框 -->
+  <dialog id="proxyEditDialog" style="max-width:580px;width:92%">
     <div class="dialog-head">
       <h2 id="proxyEditTitle">编辑代理节点</h2>
       <button id="closeProxyEditDialog" class="btn icon-only" type="button" title="关闭" aria-label="关闭"><span class="btn-icon">x</span></button>
@@ -815,11 +824,11 @@
           </div>
           <div class="field">
             <label for="editProxyPort">端口</label>
-            <input id="editProxyPort" type="number" min="1" max="65535" placeholder="例如：1080" required>
+            <input id="editProxyPort" type="number" min="1" max="65535" placeholder="例如：1080 / 7890" required>
           </div>
           <div class="field full">
             <label for="editProxyHost">主机地址 (IP/域名)</label>
-            <input id="editProxyHost" type="text" placeholder="例如：127.0.0.1" required>
+            <input id="editProxyHost" type="text" placeholder="例如：127.0.0.1 (支持粘贴带端口自动拆分)" required>
           </div>
           <div class="field">
             <label for="editProxyUser">用户名（可选）</label>
@@ -830,18 +839,19 @@
             <input id="editProxyPass" type="password" placeholder="可选密码">
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
-          <span id="editProxyDetectStatus" style="font-size:12px;color:var(--muted)">修改后可测速并保存</span>
-          <div style="display:flex;gap:8px">
-            <button id="editProxyTestBtn" class="btn" type="button"><span class="btn-icon">⚡</span>测试连接</button>
-            <button id="saveProxyEditBtn" class="btn btn-primary" type="button"><span class="btn-icon">✔</span>保存修改</button>
-          </div>
-        </div>
       </form>
+    </div>
+    <div class="dialog-foot">
+      <span id="editProxyDetectStatus" style="font-size:12px;color:var(--muted)">修改后可测速并保存</span>
+      <div style="display:flex;gap:8px">
+        <button id="editProxyTestBtn" class="btn" type="button"><span class="btn-icon">⚡</span>测试连接</button>
+        <button id="cancelProxyEditBtn" class="btn" type="button">取消</button>
+        <button id="saveProxyEditBtn" class="btn btn-primary" type="button" style="font-weight:700"><span class="btn-icon">✔</span>保存修改</button>
+      </div>
     </div>
   </dialog>
   <!-- 链式入口代理编辑对话框 -->
-  <dialog id="chainEntryDialog" style="max-width:560px;width:92%">
+  <dialog id="chainEntryDialog" style="max-width:580px;width:92%">
     <div class="dialog-head">
       <h2>🔗 配置链式代理入口 (Entry / Relay Proxy)</h2>
       <button id="closeChainEntryDialog" class="btn icon-only" type="button" title="关闭" aria-label="关闭"><span class="btn-icon">x</span></button>
@@ -857,12 +867,12 @@
           </label>
         </div>
         <div style="margin-bottom:12px">
-          <input id="modalChainPaste" type="text" placeholder="💡 快速粘贴入口代理（如 socks5://user:pass@127.0.0.1:1080 或 127.0.0.1:7890）自动拆分填入">
+          <input id="modalChainPaste" type="text" placeholder="💡 快捷粘贴（支持 127.0.0.1:7890 或 socks5://user:pass@127.0.0.1:1080 自动拆分）">
         </div>
         <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px">
           <div class="field full">
             <label for="modalChainRemark">入口备注说明</label>
-            <input id="modalChainRemark" type="text" placeholder="例如：海外中继节点 / 本地VPN客户端 / 香港专线跳板">
+            <input id="modalChainRemark" type="text" placeholder="例如：本地Clash / 海外跳板 / 公司中继">
           </div>
           <div class="field">
             <label for="modalChainProto">协议类型</label>
@@ -873,32 +883,34 @@
           </div>
           <div class="field">
             <label for="modalChainPort">端口</label>
-            <input id="modalChainPort" type="number" min="1" max="65535" placeholder="例如：1080 / 7890" required>
+            <input id="modalChainPort" type="number" min="1" max="65535" placeholder="例如：7890 (CFW) 或 7897 (Verge)" required>
           </div>
           <div class="field full">
             <label for="modalChainHost">主机地址 (IP或域名)</label>
-            <input id="modalChainHost" type="text" placeholder="例如：127.0.0.1 或跳板服务器IP" required>
+            <input id="modalChainHost" type="text" placeholder="例如：127.0.0.1 (支持粘贴带端口自动拆分)" required>
           </div>
           <div class="field">
             <label for="modalChainUser">用户名（可选）</label>
-            <input id="modalChainUser" type="text" placeholder="认证用户名">
+            <input id="modalChainUser" type="text" placeholder="认证用户名（无密码可留空）">
           </div>
           <div class="field">
             <label for="modalChainPass">密码（可选）</label>
-            <input id="modalChainPass" type="password" placeholder="认证密码">
-          </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap;gap:10px">
-          <span id="modalChainTestStatus" style="font-size:12px;color:var(--muted)">可点击测速检验连通性</span>
-          <div style="display:flex;gap:8px">
-            <button id="btnModalTestChain" class="btn" type="button" title="测试该入口代理是否可连接">
-              <span class="btn-icon">⚡</span>测试入口
-            </button>
-            <button id="btnCancelChainModal" class="btn" type="button">取消</button>
-            <button id="btnSaveChainModal" class="btn btn-primary" type="button">保存入口配置</button>
+            <input id="modalChainPass" type="password" placeholder="认证密码（无密码可留空）">
           </div>
         </div>
       </form>
+    </div>
+    <div class="dialog-foot">
+      <span id="modalChainTestStatus" style="font-size:12px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="连通性状态">可测速检验连通性</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="btnModalTestChain" class="btn" type="button" title="测试该入口代理是否可连接">
+          <span class="btn-icon">⚡</span>测试入口
+        </button>
+        <button id="btnCancelChainModal" class="btn" type="button">取消</button>
+        <button id="btnSaveChainModal" class="btn btn-primary" type="button" style="font-weight:700;padding:8px 18px">
+          <span class="btn-icon">✔</span>保存入口配置
+        </button>
+      </div>
     </div>
   </dialog>
 
@@ -1030,6 +1042,53 @@
           pass,
           remark,
         };
+      }
+      function cleanInputHostPort(hostEl, portEl, protoEl) {
+        if (!hostEl) return { host: '', port: 0 };
+        let rawHost = hostEl.value.trim();
+        let rawPort = portEl ? (Number(portEl.value) || 0) : 0;
+        const parsed = parseSmartProxy(rawHost);
+        if (parsed) {
+          rawHost = parsed.host;
+          if (parsed.port) rawPort = Number(parsed.port) || rawPort;
+          if (protoEl && parsed.type) {
+            if (protoEl.id === 'modalChainProto') {
+              protoEl.value = parsed.type.includes('http') ? 'http' : 'socks5';
+            } else {
+              protoEl.value = parsed.type;
+            }
+          }
+        } else {
+          if (rawHost.includes('://')) {
+            rawHost = rawHost.replace(/^[a-zA-Z0-9]+:\/\//, '');
+          }
+          if (rawHost.includes('@')) {
+            rawHost = rawHost.split('@').pop();
+          }
+          if (rawHost.includes(':')) {
+            const parts = rawHost.split(':');
+            if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+              rawHost = parts[0];
+              rawPort = Number(parts[1]) || rawPort;
+            }
+          }
+        }
+        rawHost = rawHost.replace(/\/.*$/, '').trim();
+        if (rawHost.toLowerCase() === 'localhost') rawHost = '127.0.0.1';
+        hostEl.value = rawHost;
+        if (portEl && rawPort) portEl.value = rawPort;
+        return { host: rawHost, port: rawPort };
+      }
+
+      function autoSplitHostPort(hostEl, portEl, protoEl) {
+        if (!hostEl) return;
+        const handler = () => cleanInputHostPort(hostEl, portEl, protoEl);
+        hostEl.addEventListener('input', () => {
+          const val = hostEl.value.trim();
+          if (val.includes(':') || val.includes('/') || val.includes('@')) handler();
+        });
+        hostEl.addEventListener('paste', () => setTimeout(handler, 20));
+        hostEl.addEventListener('blur', handler);
       }
 
       function parseBatchProxyText(text, defaultProto = 'socks5', defaultRemark = '节点') {
@@ -1626,8 +1685,7 @@
 
       async function saveProxyEdit() {
         const id = $('editProxyId').value;
-        const host = $('editProxyHost').value.trim();
-        const port = Number($('editProxyPort').value);
+        const { host, port } = cleanInputHostPort($('editProxyHost'), $('editProxyPort'), $('editProxyProto'));
         const remark = $('editProxyRemark').value.trim();
         const protocol = $('editProxyProto').value;
         const proxyUserName = $('editProxyUser').value.trim();
@@ -1640,7 +1698,7 @@
 
         const btn = $('saveProxyEditBtn');
         btn.disabled = true;
-        btn.textContent = '保存中...';
+        btn.innerHTML = '<span class="btn-icon">⏳</span>保存中...';
 
         try {
           await api('/proxy/modify', {
@@ -1977,28 +2035,27 @@
       $('proxyEditDialog').addEventListener('click', (event) => { if (event.target === $('proxyEditDialog')) $('proxyEditDialog').close(); });
       $('saveProxyEditBtn').addEventListener('click', saveProxyEdit);
       $('editProxyTestBtn').addEventListener('click', async () => {
-        const host = $('editProxyHost').value.trim();
-        const port = Number($('editProxyPort').value);
+        const { host, port } = cleanInputHostPort($('editProxyHost'), $('editProxyPort'), $('editProxyProto'));
         const protocol = $('editProxyProto').value;
         const user = $('editProxyUser').value.trim();
         const pass = $('editProxyPass').value;
         if (!host || !port) {
-          $('editProxyDetectStatus').innerHTML = '<span style=\"color:var(--danger)\">✘ 请先填写主机和端口</span>';
+          $('editProxyDetectStatus').innerHTML = '<span style="color:var(--danger)">✘ 请先填写主机和端口</span>';
           return;
         }
-        $('editProxyDetectStatus').innerHTML = '<span style=\"color:var(--amber)\">测速中...</span>';
+        $('editProxyDetectStatus').innerHTML = '<span style="color:var(--amber)">测速中...</span>';
         try {
           const res = await api('/proxy/detect', {
             method: 'POST',
             body: JSON.stringify({ host, port, protocol, user, pass })
           });
           if (res.checkStatus === 1) {
-            $('editProxyDetectStatus').innerHTML = `<span class=\"test-result-ok\">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
+            $('editProxyDetectStatus').innerHTML = `<span class="test-result-ok">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
           } else {
-            $('editProxyDetectStatus').innerHTML = `<span class=\"test-result-err\">✘ ${escapeHtml(res.msg || '无法连通')}</span>`;
+            $('editProxyDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '无法连通')}</span>`;
           }
         } catch (e) {
-          $('editProxyDetectStatus').innerHTML = `<span class=\"test-result-err\">✘ ${escapeHtml(e.message)}</span>`;
+          $('editProxyDetectStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
         }
       });
       // ---------- 链式入口代理控制逻辑 ----------
@@ -2071,8 +2128,7 @@
       }
 
       async function saveChainEntryModal() {
-        const host = $('modalChainHost').value.trim();
-        const port = Number($('modalChainPort').value);
+        const { host, port } = cleanInputHostPort($('modalChainHost'), $('modalChainPort'), $('modalChainProto'));
         const remark = $('modalChainRemark').value.trim();
         const protocol = $('modalChainProto').value;
         const username = $('modalChainUser').value.trim();
@@ -2086,6 +2142,7 @@
 
         const saveBtn = $('btnSaveChainModal');
         saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="btn-icon">⏳</span>保存中...';
         try {
           const res = await api('/proxy/entry', {
             method: 'POST',
@@ -2109,12 +2166,12 @@
           toast(`保存失败: ${e.message}`, true);
         } finally {
           saveBtn.disabled = false;
+          saveBtn.innerHTML = '<span class="btn-icon">✔</span>保存入口配置';
         }
       }
 
       async function testChainModal() {
-        const host = $('modalChainHost').value.trim();
-        const port = Number($('modalChainPort').value);
+        const { host, port } = cleanInputHostPort($('modalChainHost'), $('modalChainPort'), $('modalChainProto'));
         const protocol = $('modalChainProto').value;
         const username = $('modalChainUser').value.trim();
         const password = $('modalChainPass').value;
@@ -2212,7 +2269,10 @@
       $('btnTestChainProxy').addEventListener('click', testChainCard);
       $('btnModalTestChain').addEventListener('click', testChainModal);
       $('btnSaveChainModal').addEventListener('click', saveChainEntryModal);
-
+      autoSplitHostPort($('modalChainHost'), $('modalChainPort'), $('modalChainProto'));
+      autoSplitHostPort($('editProxyHost'), $('editProxyPort'), $('editProxyProto'));
+      autoSplitHostPort($('proxyHost'), $('proxyPort'), $('proxyType'));
+      $('cancelProxyEditBtn')?.addEventListener('click', () => $('proxyEditDialog').close());
 
       refresh().then((ok) => { if (ok) log('本机 API 与代理池自选列表已连接', 'success'); });
     })();
