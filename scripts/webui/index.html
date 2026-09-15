@@ -20,6 +20,9 @@
       --amber: #efb866;
       --danger: #e77d73;
       --success: #75d49a;
+      --purple: #b388ff;
+      --purple-bg: rgba(179, 136, 255, 0.08);
+      --purple-border: rgba(179, 136, 255, 0.35);
       --shadow: 0 18px 50px rgba(0,0,0,.24);
     }
     * { box-sizing: border-box; }
@@ -649,6 +652,32 @@
 
         <!-- 代理池自选列表视图 -->
         <div id="viewProxies" class="tab-view">
+          <!-- 链式代理入口卡片 -->
+          <div id="chainProxyCard" class="proxy-card" style="margin:16px 20px 0;border-left:3px solid var(--purple);background:var(--purple-bg)">
+            <div class="proxy-card-head" style="margin-bottom:8px">
+              <div class="proxy-card-title" style="color:#d8b4fe">
+                <span class="btn-icon">🔗</span>链式代理入口 (Entry / Relay Proxy)
+                <span id="chainProxyBadge" class="badge" style="margin-left:6px;background:var(--surface-3);color:var(--muted)">已停用</span>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label style="margin:0;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;user-select:none">
+                  <input type="checkbox" id="chainProxyToggle" style="cursor:pointer"> 启用链式代理中继
+                </label>
+                <button id="btnEditChainProxy" class="btn" type="button" style="padding:4px 12px;font-size:12px" title="设置前置跳板代理服务器地址与认证">
+                  <span class="btn-icon">⚙</span>配置入口代理
+                </button>
+                <button id="btnTestChainProxy" class="btn" type="button" style="padding:4px 12px;font-size:12px" title="即时测试此入口代理自身的连通性与延迟">
+                  <span class="btn-icon">⚡</span>测试入口
+                </button>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);flex-wrap:wrap;gap:8px">
+              <div id="chainProxySummaryText">
+                当前未配置或未启用链式入口。启用后，所有浏览器及节点探测将优先通过此入口跳板转发。
+              </div>
+              <div id="chainProxyStatusText" style="font-family:Consolas,monospace"></div>
+            </div>
+          </div>
           <!-- 批量添加面板 (可折叠) -->
           <div id="batchAddPanel" class="proxy-card hidden" style="margin:16px 20px 0;border-left:3px solid var(--accent)">
             <div class="proxy-card-head">
@@ -811,6 +840,67 @@
       </form>
     </div>
   </dialog>
+  <!-- 链式入口代理编辑对话框 -->
+  <dialog id="chainEntryDialog" style="max-width:560px;width:92%">
+    <div class="dialog-head">
+      <h2>🔗 配置链式代理入口 (Entry / Relay Proxy)</h2>
+      <button id="closeChainEntryDialog" class="btn icon-only" type="button" title="关闭" aria-label="关闭"><span class="btn-icon">x</span></button>
+    </div>
+    <div class="dialog-body">
+      <p style="margin:0 0 14px;color:var(--muted);font-size:12px;line-height:1.6">
+        配置全局前置入口跳板代理。启用后，所有浏览器流量与节点连通性探测将优先通过此跳板中继（链路：<code>Roxy 浏览器 -> 入口代理 -> 档案出口节点 -> 目标网站</code>）。
+      </p>
+      <form id="chainEntryForm" onsubmit="return false;">
+        <div style="margin-bottom:14px;padding:10px 14px;background:var(--purple-bg);border-radius:4px;border:1px solid var(--purple-border)">
+          <label style="margin:0;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font-weight:600;color:#e9d5ff">
+            <input type="checkbox" id="modalChainEnabled" style="cursor:pointer;transform:scale(1.15)"> 开启链式代理中继模式
+          </label>
+        </div>
+        <div style="margin-bottom:12px">
+          <input id="modalChainPaste" type="text" placeholder="💡 快速粘贴入口代理（如 socks5://user:pass@127.0.0.1:1080 或 127.0.0.1:7890）自动拆分填入">
+        </div>
+        <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px">
+          <div class="field full">
+            <label for="modalChainRemark">入口备注说明</label>
+            <input id="modalChainRemark" type="text" placeholder="例如：海外中继节点 / 本地VPN客户端 / 香港专线跳板">
+          </div>
+          <div class="field">
+            <label for="modalChainProto">协议类型</label>
+            <select id="modalChainProto">
+              <option value="socks5">SOCKS5 (推荐)</option>
+              <option value="http">HTTP (CONNECT)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="modalChainPort">端口</label>
+            <input id="modalChainPort" type="number" min="1" max="65535" placeholder="例如：1080 / 7890" required>
+          </div>
+          <div class="field full">
+            <label for="modalChainHost">主机地址 (IP或域名)</label>
+            <input id="modalChainHost" type="text" placeholder="例如：127.0.0.1 或跳板服务器IP" required>
+          </div>
+          <div class="field">
+            <label for="modalChainUser">用户名（可选）</label>
+            <input id="modalChainUser" type="text" placeholder="认证用户名">
+          </div>
+          <div class="field">
+            <label for="modalChainPass">密码（可选）</label>
+            <input id="modalChainPass" type="password" placeholder="认证密码">
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap;gap:10px">
+          <span id="modalChainTestStatus" style="font-size:12px;color:var(--muted)">可点击测速检验连通性</span>
+          <div style="display:flex;gap:8px">
+            <button id="btnModalTestChain" class="btn" type="button" title="测试该入口代理是否可连接">
+              <span class="btn-icon">⚡</span>测试入口
+            </button>
+            <button id="btnCancelChainModal" class="btn" type="button">取消</button>
+            <button id="btnSaveChainModal" class="btn btn-primary" type="button">保存入口配置</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </dialog>
 
   <!-- 提示消息浮层 -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -819,7 +909,7 @@
     (() => {
       const API = location.protocol === 'http:' || location.protocol === 'https:' ? location.origin : 'http://127.0.0.1:50000';
       const UI_TOKEN = new URLSearchParams(location.search).get('apiKey') || '';
-      const state = { meta: {}, rows: [], connections: [], proxies: [] };
+      const state = { meta: {}, rows: [], connections: [], proxies: [], entryProxy: null };
       let toastTimer;
 
       const $ = (id) => document.getElementById(id);
@@ -1117,6 +1207,15 @@
           const remark = item.remark ? escapeHtml(item.remark) : '<span style="color:var(--muted)">未命名</span>';
           const isSelected = currentProxyMode === `pool:${item.id}`;
           const isSaved = item.isSaved !== false;
+          const isEntry = Boolean(
+            state.entryProxy &&
+            state.entryProxy.host &&
+            String(state.entryProxy.host).toLowerCase() === String(item.host).toLowerCase() &&
+            String(state.entryProxy.port) === String(item.port)
+          );
+          const entryBadge = isEntry
+            ? `<span class="badge" style="background:${state.entryProxy.enabled ? '#7e22ce' : 'var(--surface-3)'};color:${state.entryProxy.enabled ? '#f3e8ff' : 'var(--muted)'};font-size:10px;margin-left:5px" title="${state.entryProxy.enabled ? '当前生效的链式入口跳板' : '当前入口代理（未开启中继）'}">🔗 ${state.entryProxy.enabled ? '当前入口' : '入口(未启用)'}</span>`
+            : '';
 
           const selectBadge = isSelected
             ? '<span class="selected-proxy-badge">🎯 当前已选</span>'
@@ -1128,7 +1227,7 @@
 
           return `<tr class="${isSelected ? 'is-selected-proxy' : ''}">
             <td>${selectBadge}</td>
-            <td><strong>${remark}</strong>${isSaved ? '' : ' <span style="font-size:10px;color:var(--muted)">[档案提取]</span>'}</td>
+            <td><strong>${remark}</strong>${isSaved ? '' : ' <span style="font-size:10px;color:var(--muted)">[档案提取]</span>'}${entryBadge}</td>
             <td><span class="badge-tag tag-${proto}">${protoUpper}</span></td>
             <td><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code></td>
             <td>${auth}</td>
@@ -1137,6 +1236,9 @@
               <div class="row-actions">
                 <button class="btn ${isSelected ? 'btn-quiet' : 'btn-primary'}" data-proxy-action="apply" data-id="${escapeHtml(item.id)}" title="自选此代理用于创建档案">
                   <span class="btn-icon">🎯</span>${isSelected ? '已自选' : '自选此代理'}
+                </button>
+                <button class="btn" data-proxy-action="set-entry" data-id="${escapeHtml(item.id)}" title="将此节点设为链式入口跳板代理">
+                  <span class="btn-icon">🔗</span>${isEntry ? '入口节点' : '设为入口'}
                 </button>
                 <button class="btn" data-proxy-action="test" data-id="${escapeHtml(item.id)}" title="测试连通性与延迟">
                   <span class="btn-icon">⚡</span>测速
@@ -1231,7 +1333,7 @@
             api('/browser/list'),
             api('/meta/info'),
             api('/browser/connection_info'),
-            refreshProxies()
+            refreshChainProxy()
           ]);
           state.meta = meta || {};
           state.rows = Array.isArray(list) ? list : (list?.rows || []);
@@ -1239,7 +1341,7 @@
           populateMeta(state.meta);
           populateService(info || {});
           renderRows();
-          setState('ok', `API 在线 · ${new URL(API).host}`);
+          await refreshProxies();
           return true;
         } catch (error) {
           setState('error', 'API 未连接');
@@ -1403,6 +1505,30 @@
 
         if (action === 'edit') {
           openProxyEditModal(item);
+          return;
+        }
+        if (action === 'set-entry') {
+          try {
+            const res = await api('/proxy/entry', {
+              method: 'POST',
+              body: JSON.stringify({
+                enabled: true,
+                remark: item.remark || '从代理池选入',
+                protocol: (item.protocol || item.type || 'socks5').toLowerCase(),
+                host: item.host,
+                port: item.port,
+                username: item.proxyUserName || '',
+                password: item.proxyPassword || ''
+              })
+            });
+            state.entryProxy = res && typeof res === 'object' ? res : null;
+            renderChainProxy();
+            renderProxies();
+            toast(`已将节点 [${item.remark || item.host}:${item.port}] 设为链式入口代理并开启中继！`);
+            log(`已设为链式入口代理：${item.host}:${item.port}`, 'success');
+          } catch (e) {
+            toast(`设为入口失败: ${e.message}`, true);
+          }
           return;
         }
 
@@ -1875,6 +2001,218 @@
           $('editProxyDetectStatus').innerHTML = `<span class=\"test-result-err\">✘ ${escapeHtml(e.message)}</span>`;
         }
       });
+      // ---------- 链式入口代理控制逻辑 ----------
+      function renderChainProxy() {
+        const ep = state.entryProxy;
+        const isConfigured = Boolean(ep && ep.host && ep.port);
+        const isEnabled = Boolean(ep && ep.enabled && isConfigured);
+
+        const toggle = $('chainProxyToggle');
+        if (toggle) toggle.checked = Boolean(ep && ep.enabled);
+
+        const badge = $('chainProxyBadge');
+        if (badge) {
+          if (isEnabled) {
+            badge.style.background = '#7e22ce';
+            badge.style.color = '#f3e8ff';
+            badge.textContent = '已启用中继';
+          } else if (isConfigured) {
+            badge.style.background = 'var(--surface-3)';
+            badge.style.color = 'var(--muted)';
+            badge.textContent = '已配置 (未启用)';
+          } else {
+            badge.style.background = 'var(--surface-3)';
+            badge.style.color = 'var(--muted)';
+            badge.textContent = '未配置';
+          }
+        }
+
+        const summary = $('chainProxySummaryText');
+        if (summary) {
+          if (isConfigured) {
+            const proto = (ep.protocol || 'socks5').toUpperCase();
+            const hostPort = `${escapeHtml(ep.host)}:${escapeHtml(ep.port)}`;
+            const remark = ep.remark ? ` · <b>${escapeHtml(ep.remark)}</b>` : '';
+            const auth = ep.username ? ' (带认证)' : '';
+            const modeText = isEnabled
+              ? '<span style="color:#c084fc;font-weight:600">● 链式中继生效中</span>：所有浏览器请求与节点测速均通过此入口跳板转发'
+              : '<span style="color:var(--muted)">○ 链式中继已暂停</span>：当前直连或仅使用档案自带出口代理';
+            summary.innerHTML = `入口跳板节点：<code style="color:#d8b4fe">[${proto}] ${hostPort}</code>${auth}${remark}<br><span style="font-size:11px;margin-top:3px;display:inline-block">${modeText}</span>`;
+          } else {
+            summary.innerHTML = '当前尚未配置链式入口。点击“<strong>⚙ 配置入口代理</strong>”或在下方代理表格点击“<strong>🔗 设为入口</strong>”，流量即可由跳板中继。';
+          }
+        }
+      }
+
+      async function refreshChainProxy() {
+        try {
+          const res = await api('/proxy/entry');
+          state.entryProxy = res && typeof res === 'object' ? res : null;
+          renderChainProxy();
+          return true;
+        } catch (err) {
+          console.warn('获取入口代理失败:', err);
+          return false;
+        }
+      }
+
+      function openChainEntryModal() {
+        const cur = state.entryProxy || {};
+        $('modalChainEnabled').checked = Boolean(cur.enabled);
+        $('modalChainRemark').value = cur.remark || '';
+        $('modalChainProto').value = (cur.protocol || 'socks5').toLowerCase();
+        $('modalChainHost').value = cur.host || '';
+        $('modalChainPort').value = cur.port || '';
+        $('modalChainUser').value = cur.username || '';
+        $('modalChainPass').value = cur.password || '';
+        $('modalChainPaste').value = '';
+        $('modalChainTestStatus').innerHTML = '<span style="color:var(--muted)">可点击测速检验跳板可用性</span>';
+        $('chainEntryDialog').showModal();
+      }
+
+      async function saveChainEntryModal() {
+        const host = $('modalChainHost').value.trim();
+        const port = Number($('modalChainPort').value);
+        const remark = $('modalChainRemark').value.trim();
+        const protocol = $('modalChainProto').value;
+        const username = $('modalChainUser').value.trim();
+        const password = $('modalChainPass').value;
+        const enabled = $('modalChainEnabled').checked;
+
+        if (enabled && (!host || !port)) {
+          toast('启用链式代理前，必须填写主机与有效端口', true);
+          return;
+        }
+
+        const saveBtn = $('btnSaveChainModal');
+        saveBtn.disabled = true;
+        try {
+          const res = await api('/proxy/entry', {
+            method: 'POST',
+            body: JSON.stringify({
+              enabled,
+              remark,
+              protocol,
+              host,
+              port,
+              username,
+              password
+            })
+          });
+          state.entryProxy = res && typeof res === 'object' ? res : null;
+          renderChainProxy();
+          renderProxies();
+          $('chainEntryDialog').close();
+          toast(enabled ? '链式入口代理已保存并开启中继' : '链式入口代理已保存');
+          log(`链式入口配置已更新：${host ? `${host}:${port}` : '空'} (启用: ${enabled})`, 'success');
+        } catch (e) {
+          toast(`保存失败: ${e.message}`, true);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      }
+
+      async function testChainModal() {
+        const host = $('modalChainHost').value.trim();
+        const port = Number($('modalChainPort').value);
+        const protocol = $('modalChainProto').value;
+        const username = $('modalChainUser').value.trim();
+        const password = $('modalChainPass').value;
+        if (!host || !port) {
+          $('modalChainTestStatus').innerHTML = '<span style="color:var(--danger)">✘ 请先填写主机和端口</span>';
+          return;
+        }
+        $('modalChainTestStatus').innerHTML = '<span style="color:var(--amber)">测试中...</span>';
+        try {
+          const res = await api('/proxy/entry/test', {
+            method: 'POST',
+            body: JSON.stringify({ host, port, protocol, username, password })
+          });
+          if (res.checkStatus === 1) {
+            $('modalChainTestStatus').innerHTML = `<span class="test-result-ok">✔ 连通正常 (${res.latency ?? 0}ms)</span>`;
+          } else {
+            $('modalChainTestStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '连接失败')}</span>`;
+          }
+        } catch (e) {
+          $('modalChainTestStatus').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
+        }
+      }
+
+      async function testChainCard() {
+        if (!state.entryProxy?.host || !state.entryProxy?.port) {
+          toast('尚未配置入口代理，请先点击配置', true);
+          openChainEntryModal();
+          return;
+        }
+        $('chainProxyStatusText').innerHTML = '<span style="color:var(--amber)">测速中...</span>';
+        try {
+          const res = await api('/proxy/entry/test', {
+            method: 'POST',
+            body: JSON.stringify({
+              host: state.entryProxy.host,
+              port: state.entryProxy.port,
+              protocol: state.entryProxy.protocol,
+              username: state.entryProxy.username,
+              password: state.entryProxy.password,
+            })
+          });
+          if (res.checkStatus === 1) {
+            $('chainProxyStatusText').innerHTML = `<span class="test-result-ok">✔ 入口连通正常 (${res.latency ?? 0}ms)</span>`;
+            toast(`入口代理连通正常 (${res.latency ?? 0}ms)`);
+          } else {
+            $('chainProxyStatusText').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(res.msg || '无法连接')}</span>`;
+            toast(`入口代理测试失败: ${res.msg || '连接失败'}`, true);
+          }
+        } catch (e) {
+          $('chainProxyStatusText').innerHTML = `<span class="test-result-err">✘ ${escapeHtml(e.message)}</span>`;
+          toast(`入口测试异常: ${e.message}`, true);
+        }
+      }
+
+      $('chainProxyToggle').addEventListener('change', async (e) => {
+        const isChecked = e.target.checked;
+        if (isChecked && (!state.entryProxy?.host || !state.entryProxy?.port)) {
+          toast('请先配置入口代理的主机和端口', true);
+          e.target.checked = false;
+          openChainEntryModal();
+          return;
+        }
+        try {
+          await api('/proxy/entry', { method: 'POST', body: JSON.stringify({ enabled: isChecked }) });
+          if (state.entryProxy) state.entryProxy.enabled = isChecked;
+          renderChainProxy();
+          renderProxies();
+          toast(isChecked ? '已启用链式代理中继模式' : '已关闭链式代理中继');
+          log(isChecked ? '已启用链式入口中继' : '已停用链式入口中继', isChecked ? 'success' : 'info');
+        } catch (err) {
+          toast(`切换失败: ${err.message}`, true);
+          e.target.checked = !isChecked;
+        }
+      });
+
+      $('modalChainPaste').addEventListener('input', (e) => {
+        const parsed = parseSmartProxy(e.target.value);
+        if (parsed) {
+          $('modalChainProto').value = parsed.type === 'http' || parsed.type === 'https' ? 'http' : 'socks5';
+          $('modalChainHost').value = parsed.host;
+          $('modalChainPort').value = parsed.port;
+          $('modalChainUser').value = parsed.user || '';
+          $('modalChainPass').value = parsed.pass || '';
+          if (!$('modalChainRemark').value.trim() && parsed.remark) {
+            $('modalChainRemark').value = parsed.remark;
+          }
+          $('modalChainTestStatus').innerHTML = `<span class="test-result-ok">已解析: [${$('modalChainProto').value.toUpperCase()}] ${parsed.host}:${parsed.port}</span>`;
+        }
+      });
+
+      $('closeChainEntryDialog').addEventListener('click', () => $('chainEntryDialog').close());
+      $('btnCancelChainModal').addEventListener('click', () => $('chainEntryDialog').close());
+      $('chainEntryDialog').addEventListener('click', (event) => { if (event.target === $('chainEntryDialog')) $('chainEntryDialog').close(); });
+      $('btnEditChainProxy').addEventListener('click', openChainEntryModal);
+      $('btnTestChainProxy').addEventListener('click', testChainCard);
+      $('btnModalTestChain').addEventListener('click', testChainModal);
+      $('btnSaveChainModal').addEventListener('click', saveChainEntryModal);
+
 
       refresh().then((ok) => { if (ok) log('本机 API 与代理池自选列表已连接', 'success'); });
     })();

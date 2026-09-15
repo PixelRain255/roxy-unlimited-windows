@@ -208,6 +208,41 @@ async function launchWindow(dirId, opts = {}) {
   }
 
   const fp = readFingerprint(dirId) ?? {};
+  let chainBridge = null;
+  let originalLumiRaw = null;
+  if (entryProxyConfig.enabled && entryProxyConfig.host && entryProxyConfig.port) {
+    try {
+      const exitProxy = fp.fproxy || null;
+      chainBridge = await createLocalChainBridge(entryProxyConfig, exitProxy);
+      const lp = lumiPath(dirId);
+      if (fs.existsSync(lp)) {
+        originalLumiRaw = fs.readFileSync(lp);
+      }
+      const modifiedFp = JSON.parse(JSON.stringify(fp));
+      modifiedFp.fproxy = {
+        type: 'socks5',
+        host: '127.0.0.1',
+        port: chainBridge.port,
+        username: '',
+        password: '',
+        proxyByPassList: '127.0.0.1;localhost;::1',
+      };
+      if (!modifiedFp.portScan) {
+        modifiedFp.portScan = { enablePortScanWhiteList: true, portScanWhiteList: '45535;' };
+      }
+      const curList = String(modifiedFp.portScan.portScanWhiteList || '');
+      if (!curList.includes(String(chainBridge.port))) {
+        modifiedFp.portScan.portScanWhiteList = `${curList};${chainBridge.port};`;
+      }
+      fs.writeFileSync(lp, encLumi(JSON.stringify(modifiedFp)));
+    } catch (e) {
+      console.warn(`[roxy-api] chain bridge init failed for ${dirId}: ${e?.message}`);
+      if (chainBridge) {
+        try { chainBridge.close(); } catch {}
+        chainBridge = null;
+      }
+    }
+  }
   // window size follows the profile's own screen config so the two never disagree
   const scr = fp.screen ?? {};
   const w = Number(scr.width) || 1920;
@@ -247,7 +282,14 @@ async function launchWindow(dirId, opts = {}) {
 
   const proc = spawn(coreExe(), args, { detached: true, stdio: 'ignore', windowsHide: headless });
   proc.unref();
-
+  if (chainBridge) {
+    proc.on('exit', () => { try { chainBridge.close(); } catch {} });
+  }
+  if (originalLumiRaw) {
+    setTimeout(() => {
+      try { fs.writeFileSync(lumiPath(dirId), originalLumiRaw); } catch {}
+    }, 4000);
+  }
   const { port, wsPath } = await waitDevTools(ud, proc);
   const ws = `ws://127.0.0.1:${port}${wsPath}`;
   const rec = {
@@ -259,6 +301,7 @@ async function launchWindow(dirId, opts = {}) {
     driver: DRIVER(),
     startedAt: Date.now(),
     noiseInstalled: false,
+    chainBridge,
   };
   running.set(dirId, rec);
 
@@ -296,6 +339,7 @@ async function cdpClose(wsUrl) {
 async function closeWindow(dirId) {
   const rec = running.get(dirId);
   if (!rec) return false;
+  try { rec.chainBridge?.close(); } catch {}
   try { rec.noiseController?.close(); } catch {}
   try { await cdpClose(rec.ws); } catch {}
   await sleep(600);
@@ -462,7 +506,18 @@ function modifyFingerprintOnDisk(dirId, body) {
 }
 const PROXY_STORE_FILE = path.join(PATHS.dataDir || process.cwd(), 'proxy_pool.json');
 const PROXY_IGNORED_FILE = path.join(PATHS.dataDir || process.cwd(), 'proxy_ignored.json');
+const ENTRY_PROXY_FILE = path.join(PATHS.dataDir || process.cwd(), 'entry_proxy.json');
 const ignoredExtractedProxies = new Set();
+let entryProxyConfig = {
+  enabled: false,
+  protocol: 'socks5',
+  host: '',
+  port: '',
+  username: '',
+  password: '',
+  remark: '',
+  updateTime: '',
+};
 
 function proxyRow(id, value) {
   const p = value ?? {};
@@ -531,6 +586,280 @@ function saveProxyStore() {
   } catch (err) {
     console.warn('[roxy-api] Failed to save proxy store:', err.message);
   }
+}
+function loadEntryProxyStore() {
+  try {
+    if (fs.existsSync(ENTRY_PROXY_FILE)) {
+      const raw = fs.readFileSync(ENTRY_PROXY_FILE, 'utf8');
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') {
+        entryProxyConfig = {
+          enabled: Boolean(obj.enabled),
+          protocol: String(obj.protocol || 'socks5').toLowerCase(),
+          host: String(obj.host || '').trim(),
+          port: String(obj.port || '').trim(),
+          username: String(obj.username || obj.proxyUserName || '').trim(),
+          password: String(obj.password || obj.proxyPassword || '').trim(),
+          remark: String(obj.remark || '').trim(),
+          updateTime: obj.updateTime || nowText(),
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[roxy-api] Failed to load entry_proxy.json:', err.message);
+  }
+}
+
+function saveEntryProxyStore() {
+  try {
+    const dir = path.dirname(ENTRY_PROXY_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(ENTRY_PROXY_FILE, JSON.stringify(entryProxyConfig, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[roxy-api] Failed to save entry_proxy.json:', err.message);
+  }
+}
+
+function httpConnectTunnel(socket, targetHost, targetPort, auth) {
+  return new Promise((resolve, reject) => {
+    let req = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\nProxy-Connection: Keep-Alive\r\n`;
+    const u = auth?.username || auth?.proxyUserName || auth?.user || '';
+    const p = auth?.password || auth?.proxyPassword || auth?.pass || '';
+    if (u) {
+      const creds = Buffer.from(`${u}:${p}`).toString('base64');
+      req += `Proxy-Authorization: Basic ${creds}\r\n`;
+    }
+    req += '\r\n';
+    socket.write(req);
+
+    let buf = Buffer.alloc(0);
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      const headerEnd = buf.indexOf('\r\n\r\n');
+      if (headerEnd !== -1) {
+        cleanup();
+        const headers = buf.subarray(0, headerEnd).toString('utf8');
+        const firstLine = headers.split('\r\n')[0] || '';
+        if (/^HTTP\/1\.[01]\s+200/i.test(firstLine)) {
+          const rest = buf.subarray(headerEnd + 4);
+          if (rest.length > 0) socket.unshift(rest);
+          resolve(socket);
+        } else {
+          reject(new Error(`HTTP CONNECT 失败: ${firstLine}`));
+        }
+      }
+    };
+    const onError = (e) => { cleanup(); reject(e); };
+    function cleanup() {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+    }
+    socket.on('data', onData);
+    socket.once('error', onError);
+  });
+}
+
+function socks5ConnectTunnel(socket, targetHost, targetPort, auth) {
+  return new Promise((resolve, reject) => {
+    const u = auth?.username || auth?.proxyUserName || auth?.user || '';
+    const p = auth?.password || auth?.proxyPassword || auth?.pass || '';
+    const hasAuth = Boolean(u);
+
+    if (hasAuth) {
+      socket.write(Buffer.from([0x05, 0x02, 0x00, 0x02]));
+    } else {
+      socket.write(Buffer.from([0x05, 0x01, 0x00]));
+    }
+
+    let state = 'greeting';
+    let buf = Buffer.alloc(0);
+
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      try {
+        if (state === 'greeting') {
+          if (buf.length < 2) return;
+          const [ver, method] = [buf[0], buf[1]];
+          buf = buf.subarray(2);
+          if (ver !== 0x05) throw new Error('非 SOCKS5 代理返回');
+          if (method === 0x02) {
+            if (!hasAuth) throw new Error('SOCKS5 代理要求认证，但未提供密码');
+            state = 'auth';
+            const uBuf = Buffer.from(u, 'utf8');
+            const pBuf = Buffer.from(p, 'utf8');
+            socket.write(Buffer.concat([
+              Buffer.from([0x01, uBuf.length]),
+              uBuf,
+              Buffer.from([pBuf.length]),
+              pBuf
+            ]));
+          } else if (method === 0x00) {
+            sendConnect();
+          } else {
+            throw new Error(`SOCKS5 代理不支持该认证协商: 0x${method.toString(16)}`);
+          }
+        }
+        if (state === 'auth') {
+          if (buf.length < 2) return;
+          const [ver, status] = [buf[0], buf[1]];
+          buf = buf.subarray(2);
+          if (status !== 0x00) throw new Error('SOCKS5 认证失败: 账号或密码不正确');
+          sendConnect();
+        }
+        if (state === 'connect') {
+          if (buf.length < 4) return;
+          const [ver, rep, rsv, atyp] = [buf[0], buf[1], buf[2], buf[3]];
+          if (rep !== 0x00) throw new Error(`SOCKS5 代理 CONNECT 失败 (rep=0x${rep.toString(16)})`);
+          let minLen = 4;
+          if (atyp === 0x01) minLen += 4 + 2;
+          else if (atyp === 0x03) {
+            if (buf.length < 5) return;
+            minLen += 1 + buf[4] + 2;
+          } else if (atyp === 0x04) minLen += 16 + 2;
+          if (buf.length < minLen) return;
+
+          const rest = buf.subarray(minLen);
+          cleanup();
+          if (rest.length > 0) socket.unshift(rest);
+          resolve(socket);
+        }
+      } catch (e) {
+        cleanup();
+        reject(e);
+      }
+    };
+
+    function sendConnect() {
+      state = 'connect';
+      const isIp = net.isIP(targetHost);
+      let targetBuf;
+      if (isIp === 4) {
+        const parts = targetHost.split('.').map(Number);
+        targetBuf = Buffer.from([0x05, 0x01, 0x00, 0x01, ...parts, (targetPort >> 8) & 0xff, targetPort & 0xff]);
+      } else {
+        const domainBuf = Buffer.from(targetHost, 'utf8');
+        targetBuf = Buffer.from([0x05, 0x01, 0x00, 0x03, domainBuf.length, ...domainBuf, (targetPort >> 8) & 0xff, targetPort & 0xff]);
+      }
+      socket.write(targetBuf);
+    }
+
+    function cleanup() {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+    }
+    const onError = (e) => { cleanup(); reject(e); };
+    socket.on('data', onData);
+    socket.once('error', onError);
+  });
+}
+
+function tunnelViaProxy(socket, proxyNode, targetHost, targetPort) {
+  const proto = String(proxyNode.protocol || proxyNode.type || proxyNode.proxyCategory || 'socks5').toLowerCase();
+  if (proto.startsWith('socks')) {
+    return socks5ConnectTunnel(socket, targetHost, targetPort, proxyNode);
+  } else {
+    return httpConnectTunnel(socket, targetHost, targetPort, proxyNode);
+  }
+}
+
+function createLocalChainBridge(entryProxy, exitProxy) {
+  return new Promise((resolve, reject) => {
+    const activeSockets = new Set();
+    const server = net.createServer((client) => {
+      activeSockets.add(client);
+      client.on('close', () => activeSockets.delete(client));
+      let state = 'greeting';
+      let buf = Buffer.alloc(0);
+
+      client.on('error', () => { client.destroy(); });
+
+      client.on('data', async (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (state === 'greeting') {
+          if (buf.length < 3) return;
+          const nmethods = buf[1];
+          if (buf.length < 2 + nmethods) return;
+          buf = buf.subarray(2 + nmethods);
+          client.write(Buffer.from([0x05, 0x00]));
+          state = 'request';
+        }
+        if (state === 'request') {
+          if (buf.length < 4) return;
+          const [ver, cmd, rsv, atyp] = [buf[0], buf[1], buf[2], buf[3]];
+          if (cmd !== 0x01) {
+            client.write(Buffer.from([0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+            return client.destroy();
+          }
+          let destHost = '';
+          let destPort = 0;
+          let offset = 4;
+          if (atyp === 0x01) {
+            if (buf.length < 10) return;
+            destHost = `${buf[4]}.${buf[5]}.${buf[6]}.${buf[7]}`;
+            offset = 8;
+          } else if (atyp === 0x03) {
+            const len = buf[4];
+            if (buf.length < 5 + len + 2) return;
+            destHost = buf.subarray(5, 5 + len).toString('utf8');
+            offset = 5 + len;
+          } else if (atyp === 0x04) {
+            if (buf.length < 22) return;
+            destHost = '::1';
+            offset = 20;
+          } else {
+            return client.destroy();
+          }
+          destPort = buf.readUInt16BE(offset);
+          buf = buf.subarray(offset + 2);
+          state = 'connected';
+
+          try {
+            const relaySocket = net.connect({ host: entryProxy.host, port: Number(entryProxy.port), timeout: 10000 });
+            activeSockets.add(relaySocket);
+            relaySocket.on('close', () => activeSockets.delete(relaySocket));
+
+            await new Promise((res, rej) => {
+              relaySocket.once('connect', res);
+              relaySocket.once('error', rej);
+              relaySocket.once('timeout', () => { relaySocket.destroy(); rej(new Error('连接入口代理超时 (10s)')); });
+            });
+
+            let activeTunnel = relaySocket;
+            if (exitProxy && exitProxy.host && Number(exitProxy.port)) {
+              await tunnelViaProxy(activeTunnel, entryProxy, exitProxy.host, Number(exitProxy.port));
+              await tunnelViaProxy(activeTunnel, exitProxy, destHost, destPort);
+            } else {
+              await tunnelViaProxy(activeTunnel, entryProxy, destHost, destPort);
+            }
+
+            client.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+            if (buf.length > 0) activeTunnel.write(buf);
+            client.pipe(activeTunnel);
+            activeTunnel.pipe(client);
+
+            activeTunnel.on('error', () => client.destroy());
+          } catch (err) {
+            try { client.write(Buffer.from([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0])); } catch {}
+            client.destroy();
+          }
+        }
+      });
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({
+        server,
+        port,
+        close() {
+          for (const s of activeSockets) { try { s.destroy(); } catch {} }
+          activeSockets.clear();
+          try { server.close(); } catch {}
+        }
+      });
+    });
+    server.on('error', reject);
+  });
 }
 function accountRow(id, body, times = {}) {
   return {
@@ -869,14 +1198,46 @@ const server = http.createServer(async (req, res) => {
       }
       if (!host || !port) return ok(res, { checkStatus: 0, msg: '未指定目标主机与端口' });
       const t0 = Date.now();
-      const checkPromise = new Promise((resolve) => {
-        const socket = net.createConnection({ host, port, timeout: 3500 }, () => {
-          const latency = Date.now() - t0;
-          socket.destroy();
-          resolve({ checkStatus: 1, msg: `TCP 连接成功 (${latency}ms)`, latency });
-        });
-        socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '连接超时 (3500ms)' }); });
-        socket.on('error', (e) => { resolve({ checkStatus: 2, msg: e.message || '连接失败' }); });
+      const useChain = body.useChain !== undefined
+        ? Boolean(body.useChain)
+        : Boolean(entryProxyConfig.enabled && entryProxyConfig.host && entryProxyConfig.port);
+
+      const checkPromise = new Promise(async (resolve) => {
+        if (useChain && entryProxyConfig.host && entryProxyConfig.port) {
+          try {
+            const socket = net.createConnection({
+              host: entryProxyConfig.host,
+              port: Number(entryProxyConfig.port),
+              timeout: 4500
+            });
+            socket.once('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '入口代理连接超时 (4500ms)' }); });
+            socket.once('error', (e) => resolve({ checkStatus: 2, msg: `入口代理连接失败: ${e.message || '不可达'}` }));
+            await new Promise((res, rej) => {
+              socket.once('connect', res);
+              socket.once('error', rej);
+            });
+            await tunnelViaProxy(socket, entryProxyConfig, host, port);
+            const latency = Date.now() - t0;
+            socket.destroy();
+            resolve({
+              checkStatus: 1,
+              msg: `经入口代理连接成功 (${latency}ms)`,
+              latency,
+              chained: true,
+              entryRemark: entryProxyConfig.remark || `${entryProxyConfig.host}:${entryProxyConfig.port}`
+            });
+          } catch (e) {
+            resolve({ checkStatus: 2, msg: `经入口代理转发失败: ${e.message || '握手失败'}` });
+          }
+        } else {
+          const socket = net.createConnection({ host, port, timeout: 3500 }, () => {
+            const latency = Date.now() - t0;
+            socket.destroy();
+            resolve({ checkStatus: 1, msg: `TCP 连接成功 (${latency}ms)`, latency });
+          });
+          socket.on('timeout', () => { socket.destroy(); resolve({ checkStatus: 2, msg: '连接超时 (3500ms)' }); });
+          socket.on('error', (e) => { resolve({ checkStatus: 2, msg: e.message || '连接失败' }); });
+        }
       });
       const checkResult = await checkPromise;
       if (body.id && proxyStore.has(String(body.id))) {
@@ -885,6 +1246,66 @@ const server = http.createServer(async (req, res) => {
         item.checkTime = nowText();
       }
       return ok(res, checkResult);
+    }
+
+    if (p === '/proxy/entry') {
+      if (req.method === 'POST') {
+        if (body.enabled !== undefined) entryProxyConfig.enabled = Boolean(body.enabled);
+        if (body.protocol !== undefined) entryProxyConfig.protocol = String(body.protocol || 'socks5').toLowerCase();
+        if (body.host !== undefined) entryProxyConfig.host = String(body.host).trim();
+        if (body.port !== undefined) entryProxyConfig.port = String(body.port).trim();
+        if (body.username !== undefined) entryProxyConfig.username = String(body.username || body.proxyUserName || '').trim();
+        if (body.password !== undefined) entryProxyConfig.password = String(body.password || body.proxyPassword || '');
+        if (body.remark !== undefined) entryProxyConfig.remark = String(body.remark).trim();
+        entryProxyConfig.updateTime = nowText();
+        saveEntryProxyStore();
+        return ok(res, entryProxyConfig);
+      }
+      return ok(res, entryProxyConfig);
+    }
+
+    if (p === '/proxy/entry/test') {
+      const host = String(body.host || entryProxyConfig.host || '').trim();
+      const port = Number(body.port || entryProxyConfig.port);
+      const proto = String(body.protocol || entryProxyConfig.protocol || 'socks5').toLowerCase();
+      const username = String(body.username !== undefined ? body.username : (entryProxyConfig.username || '')).trim();
+      const password = String(body.password !== undefined ? body.password : (entryProxyConfig.password || ''));
+
+      if (!host || !port) return ok(res, { checkStatus: 0, msg: '未指定入口代理的主机与端口' });
+      const t0 = Date.now();
+      try {
+        const socket = net.createConnection({ host, port, timeout: 3500 });
+        await new Promise((resolve, reject) => {
+          socket.once('connect', resolve);
+          socket.once('error', reject);
+          socket.once('timeout', () => { socket.destroy(); reject(new Error('入口代理连接超时 (3500ms)')); });
+        });
+
+        if (proto.startsWith('socks')) {
+          await new Promise((resolve, reject) => {
+            const hasAuth = Boolean(username);
+            if (hasAuth) socket.write(Buffer.from([0x05, 0x02, 0x00, 0x02]));
+            else socket.write(Buffer.from([0x05, 0x01, 0x00]));
+
+            const onData = (buf) => {
+              socket.removeListener('data', onData);
+              socket.removeListener('error', reject);
+              if (buf.length >= 2 && buf[0] === 0x05) {
+                resolve();
+              } else {
+                reject(new Error('目标端口响应异常，非标准 SOCKS5 代理'));
+              }
+            };
+            socket.on('data', onData);
+            socket.once('error', reject);
+          });
+        }
+        const latency = Date.now() - t0;
+        socket.destroy();
+        return ok(res, { checkStatus: 1, msg: `入口代理连通正常 (${latency}ms)`, latency });
+      } catch (err) {
+        return ok(res, { checkStatus: 2, msg: err.message || '入口代理连接失败' });
+      }
     }
 
     if (p === '/account/create') {
@@ -993,6 +1414,7 @@ if (!PATHS.ok) {
   process.exit(2);
 }
 loadProxyStore();
+loadEntryProxyStore();
 
 server.listen(PORT, '127.0.0.1', () => {
   const s = (p) => show(p, FULL_PATHS);   // 默认把用户名换成 %USERPROFILE% 之类的占位符
